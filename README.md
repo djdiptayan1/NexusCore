@@ -1,4 +1,14 @@
-# NexusCore - Advanced Ubuntu Server Setup Toolkit
+# NexusCore - Ubuntu Server Setup Toolkit
+
+<div align="center">
+<pre style="color:#32CD32; font-weight:bold; text-align:center;">
+ ███    ██ ███████ ██   ██ ██    ██ ███████  ██████  ██████  ██████  ███████ 
+ ████   ██ ██       ██ ██  ██    ██ ██      ██      ██    ██ ██   ██ ██      
+ ██ ██  ██ █████     ███   ██    ██ ███████ ██      ██    ██ ██████  █████   
+ ██  ██ ██ ██       ██ ██  ██    ██      ██ ██      ██    ██ ██   ██ ██      
+██   ████ ███████ ██   ██  ██████  ███████  ██████  ██████  ██   ██ ███████
+</pre>
+</div>
 
 [![Ubuntu Version](https://img.shields.io/badge/Ubuntu-24.04.2_LTS-orange.svg)](https://ubuntu.com/)
 [![Bash Script](https://img.shields.io/badge/Bash-Script-brightgreen.svg)](https://www.gnu.org/software/bash/)
