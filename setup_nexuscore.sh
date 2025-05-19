@@ -1,4 +1,4 @@
-# NexusCore Advanced Setup Script v2.1 for Ubuntu 24.04.2 LTS
+# NexusCore Setup Script v2.1 for Ubuntu 24.04.2 LTS
 
 # Exit on any error, treat unset variables as an error, and ensure pipelines fail on error
 set -euo pipefail
