@@ -1,8 +1,11 @@
+<div align="center">
+
 [![Ubuntu Version](https://img.shields.io/badge/Ubuntu-24.04.2_LTS-orange.svg)](https://ubuntu.com/)
 [![Bash Script](https://img.shields.io/badge/Bash-Script-brightgreen.svg)](https://www.gnu.org/software/bash/)
 [![Version](https://img.shields.io/badge/Version-2.1-blue.svg)](https://github.com/djdiptayan1/NexusCore)
 
-# NexusCore - Ubuntu Server Setup Toolkit
+</div>
+<!-- # NexusCore - Ubuntu Server Setup Toolkit -->
 
 <div align="center">
 <pre style="color:#32CD32; font-weight:bold; text-align:center;">
