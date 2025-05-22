@@ -130,10 +130,7 @@ fi
 if [ "$INSTALL_PYTHON" = true ]; then
     log_info "Ensuring Python 3, pip, venv, and dev headers are installed..."
     sudo apt install -y python3 python3-pip python3-venv python3-dev
-    # Set up some useful Python defaults
-    python3 -m pip install --user --upgrade pip
-    python3 -m pip install --user virtualenv pipenv ipython
-    log_success "Python 3, pip, venv, and dev headers are set up."
+    log_success "Python 3 are set up."
 fi
 
 # Java
