@@ -159,38 +159,55 @@ if [ "$INSTALL_NODEJS" = true ]; then
         # shellcheck source=/dev/null
         [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
         if command -v nvm &> /dev/null; then
+            # Temporarily disable unset variable checking for NVM operations
+            set +u
             nvm install --lts && nvm use --lts && nvm alias default 'lts/*'
+            set -u  # Re-enable strict mode
             log_success "Node.js LTS installed via NVM and activated for this session."
         else log_error "NVM installation failed."; fi
     else
         log_info "NVM already installed. Sourcing and ensuring LTS Node.js."
         # shellcheck source=/dev/null
         [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+        
+        # Temporarily disable unset variable checking for NVM operations
+        set +u
         if ! nvm ls 'lts/*' &> /dev/null || ! (nvm current | grep -q 'lts'); then
             nvm install --lts && nvm use --lts && nvm alias default 'lts/*'
         fi
+        set -u  # Re-enable strict mode
+        
         log_success "NVM sourced, Node.js LTS configured and activated for this session."
     fi
     
-    # Add to both bashrc and zshrc if it exists
-    echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.bashrc
-    echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm' >> ~/.bashrc
-    echo '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion' >> ~/.bashrc
+    # Add to both bashrc and zshrc if it exists (only if not already present)
+    if ! grep -q 'export NVM_DIR="$HOME/.nvm"' ~/.bashrc 2>/dev/null; then
+        echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.bashrc
+        echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm' >> ~/.bashrc
+        echo '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion' >> ~/.bashrc
+        log_info "NVM configuration added to .bashrc"
+    else
+        log_info "NVM configuration already exists in .bashrc"
+    fi
     
-    if [ -f "$HOME/.zshrc" ]; then
+    if [ -f "$HOME/.zshrc" ] && ! grep -q 'export NVM_DIR="$HOME/.nvm"' ~/.zshrc 2>/dev/null; then
         echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.zshrc
         echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm' >> ~/.zshrc
         echo '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion' >> ~/.zshrc
         log_info "NVM configuration added to .zshrc"
+    elif [ -f "$HOME/.zshrc" ]; then
+        log_info "NVM configuration already exists in .zshrc"
     fi
     
     # Install some useful global npm packages
     if command -v npm &> /dev/null; then
+        # Temporarily disable unset variable checking for npm operations too
+        set +u
         npm install -g yarn typescript ts-node nodemon pm2
+        set -u
         log_success "Installed global npm packages: yarn, typescript, ts-node, nodemon, pm2"
     fi
 fi
-
 # Docker & Docker Compose
 if [ "$INSTALL_DOCKER" = true ]; then
     log_info "Installing Docker and Docker Compose..."
