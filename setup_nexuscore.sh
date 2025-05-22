@@ -178,12 +178,12 @@ create_restricted_sudo_user() {
     
     # Create sudoers configuration for restricted access
     sudo tee "/etc/sudoers.d/${username}_restricted" > /dev/null << EOF
-# Allow $username to run most commands with sudo, but restrict user management
-$username ALL=(ALL:ALL) ALL, !%usermod_cmds, !%user_creation_cmds
-
 # Define command aliases for user management restrictions
-Cmnd_Alias usermod_cmds = /usr/sbin/adduser, /usr/sbin/useradd, /usr/sbin/userdel, /usr/sbin/usermod, /usr/sbin/deluser
-Cmnd_Alias user_creation_cmds = /usr/bin/passwd [A-z]*, /usr/sbin/chpasswd, /usr/sbin/newusers
+Cmnd_Alias USERMOD_CMDS = /usr/sbin/adduser, /usr/sbin/useradd, /usr/sbin/userdel, /usr/sbin/usermod, /usr/sbin/deluser
+Cmnd_Alias USER_PASSWD_CMDS = /usr/bin/passwd [A-z]*, /usr/sbin/chpasswd, /usr/sbin/newusers
+
+# Allow $username to run most commands with sudo, but restrict user management
+$username ALL=(ALL:ALL) ALL, !USERMOD_CMDS, !USER_PASSWD_CMDS
 
 # Allow $username to change their own password
 $username ALL=(ALL) NOPASSWD: /usr/bin/passwd $username
