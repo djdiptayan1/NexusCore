@@ -6,6 +6,7 @@ set -euo pipefail
 # --- Configuration ---
 # Change these variables to match your preferences
 ADMIN_USER="djdiptayan"
+ADDITIONAL_USER="anwin"
 JAVA_VERSION="17"
 INSTALL_DOCKER=true
 INSTALL_PYTHON=true
@@ -84,11 +85,129 @@ backup_file() {
     fi
 }
 
+setup_user_environment() {
+    local username="$1"
+    local user_home="/home/$username"
+    
+    log_info "Setting up development environment for user: $username"
+    
+    # NVM setup for the user
+    if [ "$INSTALL_NODEJS" = true ]; then
+        log_info "Setting up NVM for user $username..."
+        sudo -u "$username" bash << 'EOF'
+export NVM_DIR="$HOME/.nvm"
+if [ ! -d "$NVM_DIR" ]; then
+    mkdir -p "$NVM_DIR"
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+    [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+    if command -v nvm &> /dev/null; then
+        set +u
+        nvm install --lts && nvm use --lts && nvm alias default 'lts/*'
+        set -u
+    fi
+    
+    # Add to bashrc
+    if ! grep -q 'export NVM_DIR="$HOME/.nvm"' ~/.bashrc 2>/dev/null; then
+        echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.bashrc
+        echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' >> ~/.bashrc
+        echo '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"' >> ~/.bashrc
+    fi
+    
+    # Add to zshrc if it exists
+    if [ -f "$HOME/.zshrc" ] && ! grep -q 'export NVM_DIR="$HOME/.nvm"' ~/.zshrc 2>/dev/null; then
+        echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.zshrc
+        echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' >> ~/.zshrc
+        echo '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"' >> ~/.zshrc
+    fi
+fi
+EOF
+    fi
+    
+    # Miniconda setup for the user
+    if [ "$INSTALL_MINICONDA" = true ]; then
+        log_info "Setting up Miniconda for user $username..."
+        sudo -u "$username" bash << 'EOF'
+CONDA_DIR="$HOME/miniconda3"
+if [ ! -d "$CONDA_DIR/bin" ]; then
+    mkdir -p "$CONDA_DIR"
+    wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O "$HOME/miniconda_installer.sh"
+    bash "$HOME/miniconda_installer.sh" -b -u -p "$CONDA_DIR"
+    rm "$HOME/miniconda_installer.sh"
+    eval "$("$CONDA_DIR/bin/conda" 'shell.bash' 'hook')"
+    "$CONDA_DIR/bin/conda" init bash
+    
+    if [ -f "$HOME/.zshrc" ]; then
+        "$CONDA_DIR/bin/conda" init zsh
+    fi
+    
+    conda config --set auto_activate_base false
+fi
+EOF
+    fi
+    
+    # Create system logs directory for the user
+    sudo -u "$username" mkdir -p "$user_home/system_logs"
+    
+    log_success "Development environment set up for user: $username"
+}
+
+create_restricted_sudo_user() {
+    local username="$1"
+    
+    log_info "Creating user '$username' with restricted sudo privileges..."
+    
+    # Create the user if it doesn't exist
+    if ! id "$username" &>/dev/null; then
+        sudo adduser --disabled-password --gecos "" "$username"
+        log_info "User '$username' created."
+        
+        # Set a temporary password and force password change on first login
+        echo "Please set a password for user '$username':"
+        sudo passwd "$username"
+        sudo chage -d 0 "$username"  # Force password change on first login
+    else
+        log_info "User '$username' already exists."
+    fi
+    
+    # Add user to necessary groups
+    sudo usermod -aG sudo "$username"
+    if [ "$INSTALL_DOCKER" = true ]; then
+        sudo usermod -aG docker "$username"
+    fi
+    
+    # Create sudoers configuration for restricted access
+    sudo tee "/etc/sudoers.d/${username}_restricted" > /dev/null << EOF
+# Allow $username to run most commands with sudo, but restrict user management
+$username ALL=(ALL:ALL) ALL, !%usermod_cmds, !%user_creation_cmds
+
+# Define command aliases for user management restrictions
+Cmnd_Alias usermod_cmds = /usr/sbin/adduser, /usr/sbin/useradd, /usr/sbin/userdel, /usr/sbin/usermod, /usr/sbin/deluser
+Cmnd_Alias user_creation_cmds = /usr/bin/passwd [A-z]*, /usr/sbin/chpasswd, /usr/sbin/newusers
+
+# Allow $username to change their own password
+$username ALL=(ALL) NOPASSWD: /usr/bin/passwd $username
+EOF
+    
+    sudo chmod 440 "/etc/sudoers.d/${username}_restricted"
+    
+    # Verify sudoers file syntax
+    if sudo visudo -c; then
+        log_success "Sudoers file syntax is valid."
+    else
+        log_error "Sudoers file syntax error. Removing the restricted configuration."
+        sudo rm "/etc/sudoers.d/${username}_restricted"
+        exit 1
+    fi
+    
+    log_success "User '$username' created with restricted sudo privileges (cannot manage users)."
+}
+
 # --- Initial Setup & Sanity Checks ---
 print_banner
 check_os_compatibility
 
-log_info "Starting NexusCore Advanced Server Setup v2.1 for user: $ADMIN_USER"
+log_info "Starting NexusCore Advanced Server Setup v2.1 for users: $ADMIN_USER and $ADDITIONAL_USER"
 if [ "$(id -u)" = "0" ]; then
    log_error "This script should not be run as root. Run as a sudo-enabled user (e.g., $ADMIN_USER)."
    exit 1
@@ -97,6 +216,9 @@ fi
 if ! sudo -n true 2>/dev/null; then
     log_warning "Sudo access for $USER requires a password. You may be prompted multiple times."
 fi
+
+# Create the additional user early in the process
+create_restricted_sudo_user "$ADDITIONAL_USER"
 
 log_info "Updating package lists and upgrading existing packages..."
 sudo apt update
@@ -147,67 +269,58 @@ if [ "$INSTALL_CPP" = true ]; then
     log_success "C/C++ toolchain installed."
 fi
 
-# Node.js (via NVM)
+# Node.js (via NVM) - for current user
 if [ "$INSTALL_NODEJS" = true ]; then
-    log_info "Installing Node.js via NVM..."
+    log_info "Installing Node.js via NVM for current user..."
     export NVM_DIR="$HOME/.nvm"
     if [ ! -d "$NVM_DIR" ]; then
         mkdir -p "$NVM_DIR"
-        curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash # Check latest NVM
-        # shellcheck source=/dev/null
+        curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
         [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-        # shellcheck source=/dev/null
         [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
         if command -v nvm &> /dev/null; then
-            # Temporarily disable unset variable checking for NVM operations
             set +u
             nvm install --lts && nvm use --lts && nvm alias default 'lts/*'
-            set -u  # Re-enable strict mode
+            set -u
             log_success "Node.js LTS installed via NVM and activated for this session."
         else log_error "NVM installation failed."; fi
     else
         log_info "NVM already installed. Sourcing and ensuring LTS Node.js."
-        # shellcheck source=/dev/null
         [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
         
-        # Temporarily disable unset variable checking for NVM operations
         set +u
         if ! nvm ls 'lts/*' &> /dev/null || ! (nvm current | grep -q 'lts'); then
             nvm install --lts && nvm use --lts && nvm alias default 'lts/*'
         fi
-        set -u  # Re-enable strict mode
+        set -u
         
         log_success "NVM sourced, Node.js LTS configured and activated for this session."
     fi
     
-    # Add to both bashrc and zshrc if it exists (only if not already present)
+    # Add to bashrc and zshrc
     if ! grep -q 'export NVM_DIR="$HOME/.nvm"' ~/.bashrc 2>/dev/null; then
         echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.bashrc
-        echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm' >> ~/.bashrc
-        echo '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion' >> ~/.bashrc
+        echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' >> ~/.bashrc
+        echo '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"' >> ~/.bashrc
         log_info "NVM configuration added to .bashrc"
-    else
-        log_info "NVM configuration already exists in .bashrc"
     fi
     
     if [ -f "$HOME/.zshrc" ] && ! grep -q 'export NVM_DIR="$HOME/.nvm"' ~/.zshrc 2>/dev/null; then
         echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.zshrc
-        echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm' >> ~/.zshrc
-        echo '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion' >> ~/.zshrc
+        echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' >> ~/.zshrc
+        echo '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"' >> ~/.zshrc
         log_info "NVM configuration added to .zshrc"
-    elif [ -f "$HOME/.zshrc" ]; then
-        log_info "NVM configuration already exists in .zshrc"
     fi
     
-    # Install some useful global npm packages
+    # Install global npm packages
     if command -v npm &> /dev/null; then
-        # Temporarily disable unset variable checking for npm operations too
         set +u
         npm install -g yarn typescript ts-node nodemon pm2
         set -u
         log_success "Installed global npm packages: yarn, typescript, ts-node, nodemon, pm2"
     fi
 fi
+
 # Docker & Docker Compose
 if [ "$INSTALL_DOCKER" = true ]; then
     log_info "Installing Docker and Docker Compose..."
@@ -221,44 +334,44 @@ if [ "$INSTALL_DOCKER" = true ]; then
         sudo apt update
     fi
     sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-    if ! groups "$ADMIN_USER" | grep -q '\bdocker\b'; then
-        sudo usermod -aG docker "$ADMIN_USER"
-        log_info "User $ADMIN_USER added to docker group. CRITICAL: Re-login or use 'newgrp docker' in a new shell for this to take full effect for your interactive session."
-    else
-        log_info "User $ADMIN_USER is already a member of the docker group."
-    fi
+    
+    # Add both users to docker group
+    for user in "$ADMIN_USER" "$ADDITIONAL_USER"; do
+        if ! groups "$user" | grep -q '\bdocker\b'; then
+            sudo usermod -aG docker "$user"
+            log_info "User $user added to docker group."
+        else
+            log_info "User $user is already a member of the docker group."
+        fi
+    done
+    
     sudo systemctl enable --now docker
     log_success "Docker and Docker Compose installed and service enabled/started."
 fi
 
-# Miniconda
+# Miniconda - for current user
 if [ "$INSTALL_MINICONDA" = true ]; then
-    log_info "Installing Miniconda..."
+    log_info "Installing Miniconda for current user..."
     CONDA_DIR="$HOME/miniconda3"
     if [ ! -d "$CONDA_DIR/bin" ]; then
         mkdir -p "$CONDA_DIR"
         wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O "$HOME/miniconda_installer.sh"
         bash "$HOME/miniconda_installer.sh" -b -u -p "$CONDA_DIR"
         rm "$HOME/miniconda_installer.sh"
-        # shellcheck source=/dev/null
         eval "$("$CONDA_DIR/bin/conda" 'shell.bash' 'hook')"
         "$CONDA_DIR/bin/conda" init bash
         
-        # Also initialize for zsh if it exists
         if [ -f "$HOME/.zshrc" ]; then
             "$CONDA_DIR/bin/conda" init zsh
-            log_info "Miniconda initialized for zsh shell."
         fi
         
-        log_success "Miniconda installed to $CONDA_DIR and activated for this session. Bashrc updated."
+        log_success "Miniconda installed to $CONDA_DIR and activated for this session."
     else
         log_info "Miniconda already installed. Sourcing for current session."
-        # shellcheck source=/dev/null
         eval "$("$CONDA_DIR/bin/conda" 'shell.bash' 'hook')"
         log_success "Miniconda sourced for this session."
     fi
     
-    # Some conda configuration improvements
     conda config --set auto_activate_base false
     log_success "Configured conda to not auto-activate base environment."
 fi
@@ -268,7 +381,6 @@ if [ "$INSTALL_MONITORING_TOOLS" = true ]; then
     log_info "Installing monitoring tools (htop, glances, bpytop, radeontop, lm-sensors)..."
     sudo apt install -y htop glances bpytop radeontop lm-sensors
     log_success "Monitoring tools installed."
-    log_info "For lm-sensors: run 'sudo sensors-detect' (interactive) then 'sensors' to view."
 fi
 
 # --- Install Cloudflared ---
@@ -279,7 +391,7 @@ if [ "$INSTALL_CLOUDFLARED" = true ]; then
         CLOUDFLARED_LATEST_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}.deb"
         wget -O /tmp/cloudflared.deb "${CLOUDFLARED_LATEST_URL}"
         sudo dpkg -i /tmp/cloudflared.deb
-        sudo apt-get install -f -y # Install dependencies if any
+        sudo apt-get install -f -y
         rm /tmp/cloudflared.deb
         log_success "cloudflared $(cloudflared --version) installed."
     else
@@ -313,11 +425,13 @@ EOF
     log_success "fail2ban configured to protect SSH."
 fi
 
+# --- Set up development environments for additional user ---
+setup_user_environment "$ADDITIONAL_USER"
+
 # --- Create System Logs Directory ---
 log_info "Creating system logs directory..."
 LOGS_DIR="$HOME/system_logs"
 mkdir -p "$LOGS_DIR"
-# Create initial log files
 date > "$LOGS_DIR/setup_complete_date.log"
 uname -a > "$LOGS_DIR/system_info.log"
 lscpu > "$LOGS_DIR/cpu_info.log"
@@ -339,6 +453,7 @@ echo -e "\033[1;32mServer IP Addresses:\033[0m $SERVER_IPS"
 echo -e "\033[1;33mTo SSH into this server (from another machine on the same network), use one of these IPs:\033[0m"
 for ip in $SERVER_IPS; do
     echo "ssh $ADMIN_USER@$ip"
+    echo "ssh $ADDITIONAL_USER@$ip"
 done
 echo ""
 
@@ -363,63 +478,58 @@ echo ""
 
 log_info "Disk Usage (OS SSD):"
 df -h /
-df -hT # Show all filesystems with types
+df -hT
+echo ""
+
+log_info "-------------------- USER INFORMATION --------------------"
+echo -e "\033[1;32mUsers created:\033[0m"
+echo -e "  • $ADMIN_USER (full sudo access)"
+echo -e "  • $ADDITIONAL_USER (restricted sudo - cannot manage users)"
 echo ""
 
 log_info "-------------------- IMPORTANT NEXT STEPS --------------------"
-log_info "1. NVM & Conda: Activated for this script's session. Your ~/.bashrc has been updated for future logins."
-echo -e "   \033[1;36mCommand:\033[0m source ~/.bashrc"
+log_info "1. User '$ADDITIONAL_USER' Setup:"
+echo -e "   \033[1;36mSwitch to user:\033[0m sudo su - $ADDITIONAL_USER"
+echo -e "   \033[1;36mLogin as user:\033[0m ssh $ADDITIONAL_USER@<server-ip>"
+echo -e "   \033[1;36mPassword change:\033[0m The user will be prompted to change password on first login"
 echo ""
 
-log_info "2. Docker Permissions: User $ADMIN_USER was added to the 'docker' group. For this change to apply:"
+log_info "2. Development Environment Activation:"
+echo -e "   \033[1;36mFor both users:\033[0m source ~/.bashrc"
+echo -e "   \033[1;36mTest Node.js:\033[0m node -v"
+echo -e "   \033[1;36mTest Conda:\033[0m conda --version"
+echo ""
+
+log_info "3. Docker Permissions:"
+echo -e "   \033[1;36mBoth users added to docker group. To apply:\033[0m"
 echo -e "   \033[1;36mOption 1:\033[0m Log out and log back in"
 echo -e "   \033[1;36mOption 2:\033[0m newgrp docker"
 echo -e "   \033[1;36mTest Docker:\033[0m docker run hello-world"
 echo ""
 
-log_info "3. Configure and use hardware monitoring tools:"
-echo -e "   \033[1;36mSensors setup:\033[0m sudo sensors-detect  # Follow the prompts"
+log_info "4. User '$ADDITIONAL_USER' Restrictions:"
+echo -e "   \033[1;33mCannot run:\033[0m adduser, useradd, userdel, usermod, deluser"
+echo -e "   \033[1;33mCannot change other users' passwords\033[0m"
+echo -e "   \033[1;32mCan do everything else with sudo\033[0m"
+echo -e "   \033[1;36mTest restrictions:\033[0m sudo adduser testuser (should be denied)"
+echo ""
+
+log_info "5. Configure hardware monitoring tools:"
+echo -e "   \033[1;36mSensors setup:\033[0m sudo sensors-detect"
 echo -e "   \033[1;36mView sensors:\033[0m sensors"
-echo -e "   \033[1;36mMonitor CPU:\033[0m htop"
-echo -e "   \033[1;36mSystem monitor:\033[0m glances"
-echo -e "   \033[1;36mInteractive monitor:\033[0m bpytop"
-echo -e "   \033[1;36mDisk I/O monitor:\033[0m sudo iotop"
-echo -e "   \033[1;36mNetwork monitor:\033[0m sudo iftop"
-echo -e "   \033[1;36mDisk usage analyzer:\033[0m ncdu"
+echo -e "   \033[1;36mMonitor tools:\033[0m htop, glances, bpytop"
 echo ""
 
-log_info "4. Security tools and configurations:"
-echo -e "   \033[1;36mCheck fail2ban status:\033[0m sudo fail2ban-client status"
-echo -e "   \033[1;36mGenerate SSH key:\033[0m ssh-keygen -t ed25519 -C \"your_email@example.com\""
-echo -e "   \033[1;36mCheck firewall status:\033[0m sudo ufw status verbose"
-echo -e "   \033[1;36mView latest auth logs:\033[0m sudo tail -f /var/log/auth.log"
+log_info "6. Security and Access:"
+echo -e "   \033[1;36mCheck fail2ban:\033[0m sudo fail2ban-client status"
+echo -e "   \033[1;36mGenerate SSH keys for both users:\033[0m ssh-keygen -t ed25519"
+echo -e "   \033[1;36mFirewall status:\033[0m sudo ufw status verbose"
 echo ""
 
-log_info "5. Set up Cloudflare Tunnel:"
-echo -e "   \033[1;36mLogin to Cloudflare:\033[0m cloudflared tunnel login"
+log_info "7. Cloudflare Tunnel (available for both users):"
+echo -e "   \033[1;36mLogin:\033[0m cloudflared tunnel login"
 echo -e "   \033[1;36mCreate tunnel:\033[0m cloudflared tunnel create <tunnel-name>"
-echo -e "   \033[1;36mConfigure tunnel:\033[0m nano ~/.cloudflared/config.yml"
-echo -e "   \033[1;36mStart tunnel:\033[0m cloudflared tunnel run <tunnel-name>"
 echo ""
 
-log_info "6. User management:"
-echo -e "   \033[1;36mAdd new user:\033[0m sudo adduser <username>"
-echo -e "   \033[1;36mGrant sudo access:\033[0m sudo usermod -aG sudo <username>"
-echo -e "   \033[1;36mView users list:\033[0m cut -d: -f1 /etc/passwd"
-echo ""
-
-log_info "7. Development environments:"
-echo -e "   \033[1;36mNode.js version:\033[0m node -v"
-echo -e "   \033[1;36mPython version:\033[0m python3 -V"
-echo -e "   \033[1;36mJava version:\033[0m java -version"
-echo -e "   \033[1;36mCreate Python venv:\033[0m python3 -m venv /path/to/new/venv"
-echo -e "   \033[1;36mCreate conda env:\033[0m conda create -n env_name python=3.10"
-echo ""
-
-log_info "8. System logs directory:"
-echo -e "   \033[1;36mLocation:\033[0m $LOGS_DIR"
-echo -e "   \033[1;36mView logs:\033[0m ls -la $LOGS_DIR"
-echo ""
-
-echo -e "\n\033[1;35m--- Review the 'IMPORTANT NEXT STEPS' above carefully! --- \033[0m"
+echo -e "\n\033[1;35m--- Both users '$ADMIN_USER' and '$ADDITIONAL_USER' are ready to use! ---\033[0m"
 echo -e "\n\033[1;32m--- Thank you for using NexusCore! ---\033[0m"
