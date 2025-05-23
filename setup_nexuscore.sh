@@ -230,7 +230,7 @@ log_info "Installing essential packages, development tools, and neofetch..."
 sudo apt install -y \
     git curl wget build-essential software-properties-common apt-transport-https \
     ca-certificates gnupg lsb-release unzip zip make cmake pkg-config autoconf automake \
-    libtool gettext tree htop iotop iftop ncdu gnupg2 pass neofetch
+    libtool gettext tree htop btop nvtop iotop iftop ncdu gnupg2 pass neofetch
 log_success "Essential packages, development tools, and neofetch installed."
 
 # --- Firewall (UFW) ---
@@ -378,8 +378,8 @@ fi
 
 # --- Monitoring Tools ---
 if [ "$INSTALL_MONITORING_TOOLS" = true ]; then
-    log_info "Installing monitoring tools (htop, glances, bpytop, radeontop, lm-sensors)..."
-    sudo apt install -y htop glances bpytop radeontop lm-sensors
+    log_info "Installing monitoring tools (htop, nvtop, btop, glances, bpytop, radeontop, lm-sensors)..."
+    sudo apt install -y htop nvtop btop glances bpytop radeontop lm-sensors
     log_success "Monitoring tools installed."
 fi
 
@@ -393,7 +393,7 @@ if [ "$INSTALL_CLOUDFLARED" = true ]; then
         sudo dpkg -i /tmp/cloudflared.deb
         sudo apt-get install -f -y
         rm /tmp/cloudflared.deb
-        log_success "cloudflared $(cloudflared --version) installed."
+        log_success "cloudflared $(cloudflared --version) installed and configured."
     else
         log_info "cloudflared already installed. Version: $(cloudflared --version)"
     fi
@@ -531,5 +531,10 @@ echo -e "   \033[1;36mLogin:\033[0m cloudflared tunnel login"
 echo -e "   \033[1;36mCreate tunnel:\033[0m cloudflared tunnel create <tunnel-name>"
 echo ""
 
+log_info "NexusCore Setup Completed for users: $ADMIN_USER and $ADDITIONAL_USER"
 echo -e "\n\033[1;35m--- Both users '$ADMIN_USER' and '$ADDITIONAL_USER' are ready to use! ---\033[0m"
-echo -e "\n\033[1;32m--- Thank you for using NexusCore! ---\033[0m"
+echo
+read -p "Reboot now to apply all changes? (y/N): " -r
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    sudo reboot
+fi
