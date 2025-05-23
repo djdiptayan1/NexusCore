@@ -91,6 +91,11 @@ NexusCore is an advanced server setup script for Ubuntu 24.04 LTS that configure
 
 5. Follow the post-installation steps displayed at the end of the script execution.
 
+6. ROCm Manual Setup:
+   ```bash
+   https://rocm.docs.amd.com/projects/radeon/en/latest/docs/install/native_linux/install-radeon.html
+   ```
+
 ## 📊 What Gets Installed
 
 ### System Utilities
