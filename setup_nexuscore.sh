@@ -1,29 +1,26 @@
-# NexusCore Setup Script v2.1 for Ubuntu 24.04.2 LTS
-# With cleanup-on-failure mechanism
+# NexusCore Setup Script v3.0 for Ubuntu 24.04.2 LTS
+# Simplified single-user setup with interactive prompts
 
 # Exit on any error (globally, but main operations will be in a function with set -e),
 # treat unset variables as an error, and ensure pipelines fail on error.
 # set -euo pipefail # We will manage 'e' more granularly.
 set -uo pipefail
 
-# --- Configuration ---
-ADMIN_USER="djdiptayan"
-ADDITIONAL_USER="anwin"
+# --- Configuration (defaults, overridden by interactive prompts) ---
+ADMIN_USER="$USER"
 JAVA_VERSION="17"
-INSTALL_DOCKER=true
-INSTALL_PYTHON=true
-INSTALL_MINICONDA=true
-INSTALL_JAVA=true
-INSTALL_CPP=true
-INSTALL_NODEJS=true
-INSTALL_CLOUDFLARED=true
-INSTALL_MONITORING_TOOLS=true
-SETUP_UFW=true
+GO_VERSION="1.23.6"
+INSTALL_DOCKER=false
+INSTALL_PYTHON=false
+INSTALL_MINICONDA=false
+INSTALL_JAVA=false
+INSTALL_GO=false
+INSTALL_CPP=false
+INSTALL_NODEJS=false
+INSTALL_CLOUDFLARED=false
+INSTALL_MONITORING_TOOLS=false
+SETUP_UFW=false
 ENABLE_PASSWORD_AUTH=true
-
-INSTALL_AMD_GPU_DRIVERS=true
-AMD_GPU_INSTALLER_FULL_URL="https://repo.radeon.com/amdgpu-install/6.4.1/ubuntu/noble/amdgpu-install_6.4.60401-1_all.deb"
-AMD_GPU_INSTALLER_FILENAME="amdgpu-install_6.4.60401-1_all.deb"
 
 # --- Cleanup Handler ---
 declare -a CLEANUP_ACTIONS_ON_FAILURE # Stores commands or function calls for cleanup
@@ -100,7 +97,91 @@ print_banner() {
     echo "██  ██ ██ ██       ██ ██  ██    ██      ██ ██      ██    ██ ██   ██ ██      "
     echo "██   ████ ███████ ██   ██  ██████  ███████  ██████  ██████  ██   ██ ███████ "
     echo -e "\033[0m"
-    echo -e "\033[1;36mAdvanced Server Setup Script v2.1 for Ubuntu 24.04.2 LTS\033[0m"
+    echo -e "\033[1;36mSimplified Server Setup Script v3.0 for Ubuntu 24.04.2 LTS\033[0m"
+    echo
+}
+
+# --- Interactive Prompts ---
+ask_yes_no() {
+    local prompt="$1"
+    local default="${2:-n}"
+    local reply
+    if [ "$default" = "y" ]; then
+        read -p "$prompt [Y/n]: " -r reply
+        [[ -z "$reply" || "$reply" =~ ^[Yy]$ ]]
+    else
+        read -p "$prompt [y/N]: " -r reply
+        [[ "$reply" =~ ^[Yy]$ ]]
+    fi
+}
+
+interactive_setup() {
+    echo -e "\033[1;36m========================================\033[0m"
+    echo -e "\033[1;36m  NexusCore Interactive Setup\033[0m"
+    echo -e "\033[1;36m========================================\033[0m"
+    echo
+    echo -e "\033[1;33mSelect the components you want to install:\033[0m"
+    echo
+
+    if ask_yes_no "  Install Python 3 (pip, venv, dev headers)?"; then
+        INSTALL_PYTHON=true
+    fi
+
+    if ask_yes_no "  Install Java (OpenJDK $JAVA_VERSION)?"; then
+        INSTALL_JAVA=true
+    fi
+
+    if ask_yes_no "  Install Go ($GO_VERSION)?"; then
+        INSTALL_GO=true
+    fi
+
+    if ask_yes_no "  Install Node.js (via NVM)?"; then
+        INSTALL_NODEJS=true
+    fi
+
+    if ask_yes_no "  Install C/C++ toolchain (gcc, g++, clang)?"; then
+        INSTALL_CPP=true
+    fi
+
+    if ask_yes_no "  Install Docker & Docker Compose?"; then
+        INSTALL_DOCKER=true
+    fi
+
+    if ask_yes_no "  Install Miniconda (Python environment manager)?"; then
+        INSTALL_MINICONDA=true
+    fi
+
+    if ask_yes_no "  Install Cloudflared (Cloudflare Tunnel)?"; then
+        INSTALL_CLOUDFLARED=true
+    fi
+
+    if ask_yes_no "  Install monitoring tools (htop, glances, bpytop)?"; then
+        INSTALL_MONITORING_TOOLS=true
+    fi
+
+    if ask_yes_no "  Setup UFW firewall?"; then
+        SETUP_UFW=true
+    fi
+
+    echo
+    echo -e "\033[1;32mSetup configuration:\033[0m"
+    echo -e "  User:              $ADMIN_USER"
+    echo -e "  Python:            $INSTALL_PYTHON"
+    echo -e "  Java:              $INSTALL_JAVA"
+    echo -e "  Go:                $INSTALL_GO"
+    echo -e "  Node.js:           $INSTALL_NODEJS"
+    echo -e "  C/C++:             $INSTALL_CPP"
+    echo -e "  Docker:            $INSTALL_DOCKER"
+    echo -e "  Miniconda:         $INSTALL_MINICONDA"
+    echo -e "  Cloudflared:       $INSTALL_CLOUDFLARED"
+    echo -e "  Monitoring tools:  $INSTALL_MONITORING_TOOLS"
+    echo -e "  UFW Firewall:      $SETUP_UFW"
+    echo
+
+    if ! ask_yes_no "  Proceed with installation?" "y"; then
+        log_info "Setup cancelled by user."
+        exit 0
+    fi
     echo
 }
 
@@ -174,33 +255,18 @@ run_main_operations() {
     print_banner
     check_os_compatibility # This function now returns 1 on failure
 
-    log_info "Starting NexusCore Advanced Server Setup v2.1 for users: $ADMIN_USER and $ADDITIONAL_USER"
-    log_info "This script should be run by the user who will be '$ADMIN_USER'."
+    log_info "Starting NexusCore Server Setup v3.0 for user: $ADMIN_USER"
     if [ "$(id -u)" = "0" ]; then
-       log_error "This script should not be run as root. Run as a sudo-enabled user (preferably as '$ADMIN_USER')."
-       exit 1 # Exit immediately, no cleanup needed from script itself.
-    fi
-
-    if [ "$USER" != "$ADMIN_USER" ]; then
-        log_warning "You are running this script as user '$USER', but ADMIN_USER is set to '$ADMIN_USER'."
-        log_warning "NVM and Miniconda for the current user ('$USER') will be set up. '$ADMIN_USER' will not get this specific setup unless '$USER' is '$ADMIN_USER'."
-        log_warning "Consider running this script as '$ADMIN_USER', or manually run 'setup_user_environment \"$ADMIN_USER\"' later if needed."
-        read -p "Continue? (y/N): " -r
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            exit 1 # User chose to exit.
-        fi
+       log_error "This script should not be run as root. Run as a sudo-enabled user."
+       exit 1
     fi
 
     if ! sudo -n true 2>/dev/null; then
         log_warning "Sudo access for $USER requires a password. You may be prompted multiple times."
     fi
 
-    # Create the additional user early
-    if [ -n "$ADDITIONAL_USER" ]; then
-        create_restricted_sudo_user "$ADDITIONAL_USER" # This function will also use add_cleanup_action_on_failure
-    else
-        log_info "ADDITIONAL_USER variable is empty. Skipping creation of additional user."
-    fi
+    # Interactive component selection
+    interactive_setup
 
     log_info "Updating package lists and upgrading existing packages..."
     sudo apt update
@@ -212,7 +278,7 @@ run_main_operations() {
     sudo apt install -y \
         git curl wget build-essential software-properties-common apt-transport-https \
         ca-certificates gnupg lsb-release unzip zip make cmake pkg-config autoconf automake \
-        libtool gettext tree htop btop nvtop iotop iftop ncdu gnupg2 pass neofetch
+        libtool gettext tree htop btop iotop iftop ncdu gnupg2 pass neofetch
     # No specific cleanup for apt packages generally, too complex/risky.
     log_success "Essential packages, development tools, and neofetch installed."
 
@@ -269,6 +335,32 @@ run_main_operations() {
         log_info "Ensuring C/C++ toolchain (gcc, g++, gdb, clang, valgrind) is installed..."
         sudo apt install -y gcc g++ gdb clang valgrind
         log_success "C/C++ toolchain installed."
+    fi
+
+    # Go
+    if [ "$INSTALL_GO" = true ]; then
+        log_info "Installing Go $GO_VERSION..."
+        local go_tar="go${GO_VERSION}.linux-$(dpkg --print-architecture).tar.gz"
+        local go_tmp_path="/tmp/$go_tar"
+        wget -O "$go_tmp_path" "https://go.dev/dl/$go_tar"
+        add_cleanup_action_on_failure "log_warning 'Removing downloaded Go tarball'; rm -f '$go_tmp_path'"
+        sudo rm -rf /usr/local/go
+        sudo tar -C /usr/local -xzf "$go_tmp_path"
+        add_cleanup_action_on_failure "log_warning 'Removing Go installation'; sudo rm -rf /usr/local/go"
+        rm -f "$go_tmp_path"
+
+        # Add Go to PATH in .bashrc if not already present
+        if ! grep -q '/usr/local/go/bin' "$HOME/.bashrc"; then
+            backup_file "$HOME/.bashrc" "$USER"
+            echo 'export PATH=$PATH:/usr/local/go/bin' >> "$HOME/.bashrc"
+        fi
+        export PATH=$PATH:/usr/local/go/bin
+        if command -v go &> /dev/null; then
+            log_success "Go $(go version) installed."
+        else
+            log_error "Go installation failed."
+            return 1
+        fi
     fi
     
     # Node.js (via NVM) - for current user (assumed to be ADMIN_USER)
@@ -331,11 +423,6 @@ run_main_operations() {
         fi
     fi
 
-    # --- Install AMD GPU Drivers (Optional) ---
-    if [ "$INSTALL_AMD_GPU_DRIVERS" = true ]; then
-        install_amd_gpu_drivers # This function should also manage its own cleanup registrations
-    fi
-
     # Docker & Docker Compose
     if [ "$INSTALL_DOCKER" = true ]; then
         log_info "Installing Docker and Docker Compose..."
@@ -366,18 +453,12 @@ run_main_operations() {
             docker_group_created_by_script=true # Track if we created it
             log_info "Created docker group."
         fi
-        for user_to_add_docker_group in "$ADMIN_USER" "$ADDITIONAL_USER" "$USER"; do # Add current user too
-            if [ -n "$user_to_add_docker_group" ] && id "$user_to_add_docker_group" &>/dev/null; then
-                if ! groups "$user_to_add_docker_group" | grep -q '\bdocker\b'; then
-                    sudo usermod -aG docker "$user_to_add_docker_group"
-                    # Undoing usermod -aG is tricky; typically not done in simple cleanup.
-                    # If the group itself was created by script and is removed, that's the main part.
-                    log_info "User $user_to_add_docker_group added to docker group."
-                fi
+        if id "$ADMIN_USER" &>/dev/null; then
+            if ! groups "$ADMIN_USER" | grep -q '\bdocker\b'; then
+                sudo usermod -aG docker "$ADMIN_USER"
+                log_info "User $ADMIN_USER added to docker group."
             fi
-        done
-        # Remove duplicates from the list of users for docker group
-        # Handled by iterating unique users above.
+        fi
 
         sudo systemctl enable --now docker
         add_cleanup_action_on_failure "log_warning 'Disabling and stopping Docker service'; sudo systemctl disable --now docker"
@@ -434,9 +515,9 @@ run_main_operations() {
 
     # --- Monitoring Tools ---
     if [ "$INSTALL_MONITORING_TOOLS" = true ]; then
-        log_info "Installing additional monitoring tools (glances, bpytop, radeontop, lm-sensors)..."
-        sudo apt install -y glances bpytop radeontop lm-sensors
-        log_success "Additional monitoring tools installed."
+        log_info "Installing monitoring tools (glances, bpytop, lm-sensors)..."
+        sudo apt install -y glances bpytop lm-sensors
+        log_success "Monitoring tools installed."
     fi
 
     # --- Install Cloudflared ---
@@ -498,13 +579,6 @@ EOF
         log_info "fail2ban sshd configuration seems to exist in $JAIL_LOCAL_CONF or is managed elsewhere. No changes made."
     fi
 
-    # --- Set up development environments for additional user ---
-    if [ -n "$ADDITIONAL_USER" ] && id "$ADDITIONAL_USER" &>/dev/null; then
-        setup_user_environment "$ADDITIONAL_USER" # This function also uses add_cleanup_action_on_failure
-    else
-        log_info "Skipping environment setup for ADDITIONAL_USER (not defined or does not exist)."
-    fi
-
     # --- Create System Logs Directory for current user ---
     log_info "Creating system logs directory for current user ($USER)..."
     LOGS_DIR="$HOME/system_logs"
@@ -521,253 +595,6 @@ EOF
 }
 
 
-# --- User Environment Setup Function (called for $USER and $ADDITIONAL_USER) ---
-setup_user_environment() {
-    local username="$1"
-    local user_home
-    user_home=$(eval echo "~$username") 
-    
-    if [ ! -d "$user_home" ]; then
-        log_warning "Home directory for user $username ($user_home) not found. Skipping environment setup."
-        return # Not a fatal error for the whole script usually
-    fi
-
-    log_info "Setting up development environment for user: $username"
-    
-    # NVM setup
-    if [ "$INSTALL_NODEJS" = true ]; then
-        log_info "Setting up NVM for user $username..."
-        # Backup .bashrc and .zshrc before NVM script modifies them
-        backup_file "$user_home/.bashrc" "$username"
-        if sudo -u "$username" [ -f "$user_home/.zshrc" ]; then
-            backup_file "$user_home/.zshrc" "$username"
-        fi
-
-        # NVM installation itself creates $NVM_DIR and modifies rc files.
-        # The rc file changes are handled by backup/restore.
-        # We need to add cleanup for the $NVM_DIR.
-        sudo -u "$username" bash -e -u -o pipefail << EOF
-export NVM_DIR="\$HOME/.nvm"
-if [ ! -d "\$NVM_DIR" ]; then
-    mkdir -p "\$NVM_DIR" # NVM installer expects this
-    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
-    # Source NVM for this subshell to install Node
-    [ -s "\$NVM_DIR/nvm.sh" ] && \. "\$NVM_DIR/nvm.sh"
-    [ -s "\$NVM_DIR/bash_completion" ] && \. "\$NVM_DIR/bash_completion"
-    if command -v nvm &> /dev/null; then
-        set +u 
-        nvm install --lts && nvm use --lts && nvm alias default 'lts/*'
-        set -u
-    else
-        echo "[ERROR_NVM_SUB] NVM command not found after install for $username" >&2
-        exit 1 # Fail the subshell
-    fi
-else
-    # NVM already exists, source and ensure LTS
-    [ -s "\$NVM_DIR/nvm.sh" ] && \. "\$NVM_DIR/nvm.sh"
-    set +u
-    if ! nvm ls 'lts/*' &> /dev/null || ! (nvm current | grep -qE 'lts|node'); then
-        nvm install --lts && nvm use --lts && nvm alias default 'lts/*'
-    elif ! (nvm current | grep -q 'lts'); then
-        nvm use 'lts/*' && nvm alias default 'lts/*'
-    fi
-    set -u
-fi
-EOF
-        # Check if NVM directory was created (proxy for success of the subshell part)
-        if sudo -u "$username" test -d "$user_home/.nvm"; then
-            add_cleanup_action_on_failure "log_warning 'Removing NVM directory for $username'; sudo -u '$username' rm -rf '$user_home/.nvm'"
-            log_success "NVM appears configured for $username. Shell rc files were backed up."
-        else
-            log_error "NVM setup for $username may have failed (NVM_DIR not found or subshell error)."
-            # If subshell exited with 1, set -e in parent would catch it.
-            # If subshell had echo "[ERROR_NVM_SUB]" but didn't exit 1, parent won't know unless we check output.
-            # Assuming the subshell's set -e handles its failure.
-        fi
-    fi
-    
-    # Miniconda setup
-    if [ "$INSTALL_MINICONDA" = true ]; then
-        log_info "Setting up Miniconda for user $username..."
-        backup_file "$user_home/.bashrc" "$username"
-        if sudo -u "$username" [ -f "$user_home/.zshrc" ]; then
-            backup_file "$user_home/.zshrc" "$username"
-        fi
-        
-        sudo -u "$username" bash -e -u -o pipefail << EOF
-CONDA_DIR="\$HOME/miniconda3"
-if [ ! -d "\$CONDA_DIR/bin" ]; then
-    MINICONDA_TMP_DIR="\$HOME/miniconda_tmp_user_$username" # Unique temp dir name
-    mkdir -p "\$MINICONDA_TMP_DIR"
-    wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O "\$MINICONDA_TMP_DIR/miniconda_installer.sh"
-    bash "\$MINICONDA_TMP_DIR/miniconda_installer.sh" -b -u -p "\$CONDA_DIR"
-    rm -rf "\$MINICONDA_TMP_DIR"
-
-    eval "\$("\$CONDA_DIR/bin/conda" 'shell.bash' 'hook')"
-    "\$CONDA_DIR/bin/conda" init bash
-    if [ -f "\$HOME/.zshrc" ]; then
-        "\$CONDA_DIR/bin/conda" init zsh
-    fi
-else
-    eval "\$("\$CONDA_DIR/bin/conda" 'shell.bash' 'hook')"
-fi
-PATH="\$CONDA_DIR/bin:\$PATH" # Ensure conda is available for config
-if command -v conda &> /dev/null; then
-    conda config --set auto_activate_base false
-else
-    echo "[ERROR_CONDA_SUB] Conda command not found after install for $username" >&2
-    exit 1 # Fail the subshell
-fi
-EOF
-        if sudo -u "$username" test -d "$user_home/miniconda3"; then
-            add_cleanup_action_on_failure "log_warning 'Removing Miniconda directory for $username'; sudo -u '$username' rm -rf '$user_home/miniconda3'"
-            # The temp dir MINICONDA_TMP_DIR is cleaned by the subshell. If subshell fails before rm, it's orphaned.
-            # This is harder to clean from parent unless we make its path predictable and add cleanup from parent.
-            # For now, accept small risk of orphaned temp dir on subshell failure.
-            log_success "Miniconda appears configured for $username. Shell rc files were backed up."
-        else
-            log_error "Miniconda setup for $username may have failed (CONDA_DIR not found or subshell error)."
-        fi
-    fi
-    
-    # Create system logs directory for the user
-    sudo -u "$username" mkdir -p "$user_home/system_logs"
-    add_cleanup_action_on_failure "log_warning 'Removing system_logs for $username'; sudo -u '$username' rm -rf '$user_home/system_logs'"
-    
-    log_success "Development environment set up for user: $username"
-}
-
-# --- Restricted Sudo User Creation ---
-create_restricted_sudo_user() {
-    local username="$1"
-    local user_created_by_this_script=false
-    local sudoers_file_path="/etc/sudoers.d/${username}_restricted"
-    
-    log_info "Creating user '$username' with restricted sudo privileges..."
-    
-    if ! id "$username" &>/dev/null; then
-        sudo adduser --disabled-password --gecos "" "$username"
-        # Check if adduser succeeded
-        if ! id "$username" &>/dev/null; then
-            log_error "Failed to create user $username"
-            return 1 # Triggers ERR trap
-        fi
-        user_created_by_this_script=true
-        # Only add userdel to cleanup if this script created the user
-        add_cleanup_action_on_failure "log_warning 'Removing user $username (created by this script run)'; sudo userdel --remove '$username'"
-        log_info "User '$username' created."
-        
-        echo "Please set a password for user '$username':"
-        sudo passwd "$username"
-        sudo chage -d 0 "$username" # Force password change on first login
-    else
-        log_info "User '$username' already exists."
-    fi
-    
-    sudo usermod -aG sudo "$username" # Add to sudo group
-    # Undoing usermod -aG is complex (gpasswd -d user group), usually not done in basic cleanup.
-
-    if [ "$INSTALL_DOCKER" = true ] && getent group docker > /dev/null; then
-        sudo usermod -aG docker "$username"
-    fi
-    
-    # Create the sudoers restriction file
-    backup_file "$sudoers_file_path" # Backup if it exists, though usually it won't
-    sudo tee "$sudoers_file_path" > /dev/null << EOF
-Cmnd_Alias USERMOD_CMDS = /usr/sbin/adduser, /usr/sbin/useradd, /usr/sbin/userdel, /usr/sbin/usermod, /usr/sbin/deluser
-Cmnd_Alias USER_PASSWD_CMDS = /usr/bin/passwd [A-Za-z0-9_]*, !/usr/bin/passwd $username, /usr/sbin/chpasswd, /usr/sbin/newusers
-$username ALL=(ALL:ALL) ALL, !USERMOD_CMDS, !USER_PASSWD_CMDS
-EOF
-    if [ ! -f "$sudoers_file_path" ]; then # Check if tee command succeeded
-        log_error "Failed to create sudoers file $sudoers_file_path"
-        return 1
-    fi
-    # The backup_file function already added a restore for this. If the file didn't exist,
-    # backup_file does nothing, so we need a specific rm for the newly created file.
-    # To simplify: if backup_file's restore runs, it tries to mv a non-existent backup if file was new.
-    # Let's add a direct rm and rely on LIFO. If backup existed and was restored, this rm fails harmlessly.
-    # If file was new, this rm cleans it.
-    add_cleanup_action_on_failure "log_warning 'Removing sudoers file $sudoers_file_path'; sudo rm -f '$sudoers_file_path'"
-
-    sudo chmod 440 "$sudoers_file_path"
-    
-    if sudo visudo -c -f "$sudoers_file_path"; then # Check specific file
-        log_success "Sudoers file syntax is valid for ${username}_restricted."
-    else
-        log_error "Sudoers file syntax error for ${username}_restricted. This will cause script failure and cleanup."
-        # The 'rm' action for sudoers_file_path is already registered.
-        # set -e will ensure visudo failure (exit code 1) halts the script.
-        return 1 
-    fi
-    
-    log_success "User '$username' configured with restricted sudo privileges."
-}
-
-
-# --- AMD GPU Driver Installation ---
-install_amd_gpu_drivers() {
-    log_info "Starting AMD GPU Driver (ROCm) installation..."
-    # This function is complex. Full cleanup of a failed driver install is beyond simple scripting.
-    # We will focus on cleaning up downloaded files.
-
-    if [[ -f /etc/os-release ]]; then
-        . /etc/os-release
-        if [[ "$VERSION_CODENAME" != "noble" ]]; then
-            log_error "AMD GPU ROCm installation is for Ubuntu 24.04 (noble). Detected: $VERSION_CODENAME. Skipping."
-            return 1 # Signal error to halt if this is critical path
-        fi
-    else
-        log_error "Cannot determine OS version. Skipping AMD GPU ROCm installation."
-        return 1
-    fi
-
-    log_info "Installing prerequisites for AMD GPU drivers..."
-    sudo apt update
-    sudo apt install -y python3-setuptools python3-wheel # If these fail, script halts.
-    log_success "Prerequisites installed."
-
-    local amd_installer_tmp_path="/tmp/${AMD_GPU_INSTALLER_FILENAME}"
-    log_info "Downloading AMD GPU installer: ${AMD_GPU_INSTALLER_FILENAME}..."
-    wget --progress=bar:force -O "$amd_installer_tmp_path" "${AMD_GPU_INSTALLER_FULL_URL}"
-    # If wget fails, set -e halts. Add cleanup for the potentially partial download.
-    add_cleanup_action_on_failure "log_warning 'Removing AMD GPU installer download'; rm -f '$amd_installer_tmp_path'"
-    log_success "AMD GPU installer downloaded."
-
-    log_info "Installing AMD GPU installer script package..."
-    # This installs the 'amdgpu-install' package.
-    sudo apt install -y "$amd_installer_tmp_path" 
-    # If this install fails, script halts. Cleanup for downloaded .deb runs.
-    # If it succeeds, we could add a cleanup to 'apt remove amdgpu-install', but that's getting into
-    # package management rollback which we're trying to avoid for complexity.
-    # For now, we'll assume if this step succeeds, the 'amdgpu-install' package is there.
-    # The downloaded .deb itself can be cleaned.
-    # rm "$amd_installer_tmp_path" # Let this be handled by cleanup action or successful script completion.
-
-    log_info "Running amdgpu-install for workstation drivers and ROCm..."
-    log_warning "This step can take a significant amount of time."
-    sudo apt update 
-    sudo amdgpu-install -y --usecase=workstation,rocm
-    # If amdgpu-install fails, it can leave the system in a complex state.
-    # A simple 'apt remove' might not be sufficient or correct.
-    # The script will halt here. User intervention might be needed for deeper cleanup of ROCm.
-    log_success "amdgpu-install process completed."
-
-    log_info "Adding users to 'render' and 'video' groups..."
-    # Adding users to groups is generally safe and low-risk to leave even if script fails later.
-    # Reversing 'usermod -aG' is 'gpasswd -d user group', but usually not done.
-    for user_to_add_gpu_groups in "$ADMIN_USER" "$ADDITIONAL_USER" "$USER"; do # Include current user
-        if id "$user_to_add_gpu_groups" &>/dev/null; then
-            sudo usermod -aG render "$user_to_add_gpu_groups"
-            sudo usermod -aG video "$user_to_add_gpu_groups"
-            log_info "User $user_to_add_gpu_groups added to 'render' and 'video' groups."
-        fi
-    done
-    log_success "Users configured for GPU groups."
-    log_warning "A SYSTEM REBOOT IS REQUIRED for AMD GPU drivers."
-    log_success "AMD GPU Driver (ROCm) installation script part finished."
-}
-
-
 # --- Main Script Execution Control ---
 main_entry_point() {
     # All primary setup operations are in run_main_operations()
@@ -780,24 +607,23 @@ main_entry_point() {
         set +e # Disable exit on error for purely informational commands
         
         log_info "-------------------- SYSTEM INFORMATION --------------------"
-        # ... (all the neofetch, df, ip addr, etc. calls) ...
         echo -e "\033[1;32mHostname:\033[0m $(hostname)"
         SERVER_IPS=$(hostname -I)
         echo -e "\033[1;32mServer IP Addresses:\033[0m $SERVER_IPS"
-        # (Continue with all informational outputs from the original script)
         if command -v neofetch &> /dev/null; then neofetch; else lsb_release -a; uname -a; fi
-        # ... and so on for all final logs ...
 
         log_info "-------------------- IMPORTANT NEXT STEPS --------------------"
-        # ... (all next steps messages) ...
+        echo -e "\033[1;33m1. Reload your shell:\033[0m source ~/.bashrc"
+        if [ "$INSTALL_DOCKER" = true ]; then
+            echo -e "\033[1;33m2. Apply Docker group:\033[0m newgrp docker  (or log out and back in)"
+        fi
 
         echo
-        log_info "NexusCore Setup Process Completed for user $USER. Primary admin user is '$ADMIN_USER'."
-        # ... (final user status message) ...
+        log_info "NexusCore Setup Process Completed for user $USER."
 
         REBOOT_PROMPT_MESSAGE="Reboot now to apply all changes? (y/N): "
-        if [ "$INSTALL_AMD_GPU_DRIVERS" = true ] || [ "$INSTALL_DOCKER" = true ]; then
-            REBOOT_PROMPT_MESSAGE="Reboot now to apply all changes (RECOMMENDED for Docker group changes and/or AMD GPU drivers)? (y/N): "
+        if [ "$INSTALL_DOCKER" = true ]; then
+            REBOOT_PROMPT_MESSAGE="Reboot now to apply all changes (RECOMMENDED for Docker group changes)? (y/N): "
         fi
         read -p "$REBOOT_PROMPT_MESSAGE" -r
         if [[ $REPLY =~ ^[Yy]$ ]]; then
@@ -807,7 +633,7 @@ main_entry_point() {
     else
         # run_main_operations failed. ERR trap should have already run cleanup_on_error.
         # SCRIPT_SUCCESSFUL is still false.
-        log_error "NexusCore Advanced Setup script FAILED. Please check logs above for details on errors and cleanup attempts."
+        log_error "NexusCore Setup script FAILED. Please check logs above for details on errors and cleanup attempts."
         exit 1 # Ensure script exits with an error code
     fi
 }
