@@ -1,4 +1,4 @@
-# NexusCore Setup Script v3.0 for Ubuntu 24.04.2 LTS
+# NexusCore Setup Script v3.1 for Ubuntu 24.04.2 LTS
 # Simplified single-user setup with interactive prompts
 
 # Exit on any error (globally, but main operations will be in a function with set -e),
@@ -19,7 +19,15 @@ INSTALL_CPP=false
 INSTALL_NODEJS=false
 INSTALL_CLOUDFLARED=false
 INSTALL_MONITORING_TOOLS=false
+INSTALL_NGINX=false
 SETUP_UFW=false
+SETUP_SWAP=false
+SWAP_SIZE="2G"
+SETUP_TIMEZONE=false
+SETUP_HOSTNAME=false
+NEW_HOSTNAME=""
+SETUP_UNATTENDED_UPGRADES=false
+CONFIGURE_SSH=false
 ENABLE_PASSWORD_AUTH=true
 
 # --- Cleanup Handler ---
@@ -97,7 +105,7 @@ print_banner() {
     echo "██  ██ ██ ██       ██ ██  ██    ██      ██ ██      ██    ██ ██   ██ ██      "
     echo "██   ████ ███████ ██   ██  ██████  ███████  ██████  ██████  ██   ██ ███████ "
     echo -e "\033[0m"
-    echo -e "\033[1;36mSimplified Server Setup Script v3.0 for Ubuntu 24.04.2 LTS\033[0m"
+    echo -e "\033[1;36mComplete Server Setup Script v3.1 for Ubuntu 24.04.2 LTS\033[0m"
     echo
 }
 
@@ -120,7 +128,43 @@ interactive_setup() {
     echo -e "\033[1;36m  NexusCore Interactive Setup\033[0m"
     echo -e "\033[1;36m========================================\033[0m"
     echo
-    echo -e "\033[1;33mSelect the components you want to install:\033[0m"
+    echo -e "\033[1;33m--- Server Configuration ---\033[0m"
+    echo
+
+    if ask_yes_no "  Set a custom hostname for this server?"; then
+        read -p "    Enter hostname: " -r NEW_HOSTNAME
+        if [ -n "$NEW_HOSTNAME" ]; then
+            SETUP_HOSTNAME=true
+        fi
+    fi
+
+    if ask_yes_no "  Configure timezone?"; then
+        SETUP_TIMEZONE=true
+    fi
+
+    if ask_yes_no "  Create a swap file? (recommended for VPS with limited RAM)"; then
+        SETUP_SWAP=true
+        read -p "    Swap size (e.g. 1G, 2G, 4G) [2G]: " -r swap_input
+        [ -n "$swap_input" ] && SWAP_SIZE="$swap_input"
+    fi
+
+    if ask_yes_no "  Harden SSH configuration?"; then
+        CONFIGURE_SSH=true
+        if ask_yes_no "    Disable SSH password authentication? (key-only access)"; then
+            ENABLE_PASSWORD_AUTH=false
+        fi
+    fi
+
+    if ask_yes_no "  Setup UFW firewall?"; then
+        SETUP_UFW=true
+    fi
+
+    if ask_yes_no "  Enable automatic security updates (unattended-upgrades)?"; then
+        SETUP_UNATTENDED_UPGRADES=true
+    fi
+
+    echo
+    echo -e "\033[1;33m--- Development Tools ---\033[0m"
     echo
 
     if ask_yes_no "  Install Python 3 (pip, venv, dev headers)?"; then
@@ -151,21 +195,33 @@ interactive_setup() {
         INSTALL_MINICONDA=true
     fi
 
+    echo
+    echo -e "\033[1;33m--- Server Software ---\033[0m"
+    echo
+
+    if ask_yes_no "  Install Nginx web server?"; then
+        INSTALL_NGINX=true
+    fi
+
     if ask_yes_no "  Install Cloudflared (Cloudflare Tunnel)?"; then
         INSTALL_CLOUDFLARED=true
     fi
 
-    if ask_yes_no "  Install monitoring tools (htop, glances, bpytop)?"; then
+    if ask_yes_no "  Install monitoring tools (htop, glances, bpytop, nload)?"; then
         INSTALL_MONITORING_TOOLS=true
-    fi
-
-    if ask_yes_no "  Setup UFW firewall?"; then
-        SETUP_UFW=true
     fi
 
     echo
     echo -e "\033[1;32mSetup configuration:\033[0m"
+    echo -e "  \033[1;36m[Server]\033[0m"
     echo -e "  User:              $ADMIN_USER"
+    [ "$SETUP_HOSTNAME" = true ] && echo -e "  Hostname:          $NEW_HOSTNAME"
+    echo -e "  Timezone:          $SETUP_TIMEZONE"
+    echo -e "  Swap ($SWAP_SIZE):        $SETUP_SWAP"
+    echo -e "  SSH Hardening:     $CONFIGURE_SSH"
+    echo -e "  UFW Firewall:      $SETUP_UFW"
+    echo -e "  Auto-updates:      $SETUP_UNATTENDED_UPGRADES"
+    echo -e "  \033[1;36m[Development]\033[0m"
     echo -e "  Python:            $INSTALL_PYTHON"
     echo -e "  Java:              $INSTALL_JAVA"
     echo -e "  Go:                $INSTALL_GO"
@@ -173,9 +229,10 @@ interactive_setup() {
     echo -e "  C/C++:             $INSTALL_CPP"
     echo -e "  Docker:            $INSTALL_DOCKER"
     echo -e "  Miniconda:         $INSTALL_MINICONDA"
+    echo -e "  \033[1;36m[Software]\033[0m"
+    echo -e "  Nginx:             $INSTALL_NGINX"
     echo -e "  Cloudflared:       $INSTALL_CLOUDFLARED"
     echo -e "  Monitoring tools:  $INSTALL_MONITORING_TOOLS"
-    echo -e "  UFW Firewall:      $SETUP_UFW"
     echo
 
     if ! ask_yes_no "  Proceed with installation?" "y"; then
@@ -255,7 +312,7 @@ run_main_operations() {
     print_banner
     check_os_compatibility # This function now returns 1 on failure
 
-    log_info "Starting NexusCore Server Setup v3.0 for user: $ADMIN_USER"
+    log_info "Starting NexusCore Server Setup v3.1 for user: $ADMIN_USER"
     if [ "$(id -u)" = "0" ]; then
        log_error "This script should not be run as root. Run as a sudo-enabled user."
        exit 1
@@ -274,13 +331,85 @@ run_main_operations() {
     log_success "System updated and upgraded."
 
     # --- Install Basic Utilities & Build Tools ---
-    log_info "Installing essential packages, development tools, and neofetch..."
+    log_info "Installing essential packages, development tools, and server utilities..."
     sudo apt install -y \
         git curl wget build-essential software-properties-common apt-transport-https \
         ca-certificates gnupg lsb-release unzip zip make cmake pkg-config autoconf automake \
-        libtool gettext tree htop btop iotop iftop ncdu gnupg2 pass neofetch
-    # No specific cleanup for apt packages generally, too complex/risky.
-    log_success "Essential packages, development tools, and neofetch installed."
+        libtool gettext tree htop btop iotop iftop ncdu gnupg2 pass neofetch \
+        tmux screen vim nano jq net-tools dnsutils rsync socat mtr-tiny nload \
+        sysstat logrotate cron
+    log_success "Essential packages, development tools, and server utilities installed."
+
+    # --- Hostname Configuration ---
+    if [ "$SETUP_HOSTNAME" = true ] && [ -n "$NEW_HOSTNAME" ]; then
+        log_info "Setting hostname to '$NEW_HOSTNAME'..."
+        local old_hostname
+        old_hostname=$(hostname)
+        sudo hostnamectl set-hostname "$NEW_HOSTNAME"
+        # Update /etc/hosts if the old hostname is referenced
+        if grep -q "$old_hostname" /etc/hosts; then
+            backup_file "/etc/hosts"
+            sudo sed -i "s/$old_hostname/$NEW_HOSTNAME/g" /etc/hosts
+        fi
+        add_cleanup_action_on_failure "log_warning 'Restoring hostname to $old_hostname'; sudo hostnamectl set-hostname '$old_hostname'"
+        log_success "Hostname set to $NEW_HOSTNAME."
+    fi
+
+    # --- Timezone Configuration ---
+    if [ "$SETUP_TIMEZONE" = true ]; then
+        log_info "Configuring timezone..."
+        sudo dpkg-reconfigure tzdata
+        log_success "Timezone configured to $(cat /etc/timezone 2>/dev/null || timedatectl show --property=Timezone --value)."
+    fi
+
+    # --- Swap File ---
+    if [ "$SETUP_SWAP" = true ]; then
+        if [ -f /swapfile ]; then
+            log_info "Swap file already exists. Skipping swap creation."
+        else
+            log_info "Creating $SWAP_SIZE swap file..."
+            sudo fallocate -l "$SWAP_SIZE" /swapfile
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile
+            sudo swapon /swapfile
+            add_cleanup_action_on_failure "log_warning 'Removing swap file'; sudo swapoff /swapfile 2>/dev/null; sudo rm -f /swapfile"
+            # Make swap persistent
+            if ! grep -q '/swapfile' /etc/fstab; then
+                backup_file "/etc/fstab"
+                echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab > /dev/null
+            fi
+            # Optimize swap settings
+            if ! grep -q 'vm.swappiness' /etc/sysctl.conf; then
+                echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf > /dev/null
+                sudo sysctl vm.swappiness=10
+            fi
+            log_success "Swap file ($SWAP_SIZE) created and enabled."
+        fi
+    fi
+
+    # --- SSH Hardening ---
+    if [ "$CONFIGURE_SSH" = true ]; then
+        log_info "Configuring SSH security..."
+        local sshd_config="/etc/ssh/sshd_config"
+        backup_file "$sshd_config"
+
+        # Disable root login
+        sudo sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' "$sshd_config"
+        # Configure password authentication
+        if [ "$ENABLE_PASSWORD_AUTH" = true ]; then
+            sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' "$sshd_config"
+        else
+            sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' "$sshd_config"
+        fi
+        # Disable empty passwords
+        sudo sed -i 's/^#\?PermitEmptyPasswords.*/PermitEmptyPasswords no/' "$sshd_config"
+        # Limit max auth tries
+        sudo sed -i 's/^#\?MaxAuthTries.*/MaxAuthTries 5/' "$sshd_config"
+
+        sudo systemctl restart sshd
+        add_cleanup_action_on_failure "log_warning 'SSH config was modified; backup exists at ${sshd_config}.nexuscore_setup.bak.*'"
+        log_success "SSH hardened (RootLogin=no, PasswordAuth=$ENABLE_PASSWORD_AUTH, EmptyPasswords=no, MaxAuthTries=5)."
+    fi
 
     # --- Firewall (UFW) ---
     if [ "$SETUP_UFW" = true ]; then
@@ -515,9 +644,22 @@ run_main_operations() {
 
     # --- Monitoring Tools ---
     if [ "$INSTALL_MONITORING_TOOLS" = true ]; then
-        log_info "Installing monitoring tools (glances, bpytop, lm-sensors)..."
-        sudo apt install -y glances bpytop lm-sensors
+        log_info "Installing monitoring tools (glances, bpytop, nload, lm-sensors)..."
+        sudo apt install -y glances bpytop nload lm-sensors
         log_success "Monitoring tools installed."
+    fi
+
+    # --- Install Nginx ---
+    if [ "$INSTALL_NGINX" = true ]; then
+        log_info "Installing Nginx web server..."
+        sudo apt install -y nginx
+        sudo systemctl enable --now nginx
+        add_cleanup_action_on_failure "log_warning 'Disabling and stopping Nginx'; sudo systemctl disable --now nginx"
+        # If UFW is enabled, ensure Nginx profile is allowed
+        if [ "$SETUP_UFW" = true ]; then
+            sudo ufw allow 'Nginx Full'
+        fi
+        log_success "Nginx installed and running."
     fi
 
     # --- Install Cloudflared ---
@@ -579,14 +721,48 @@ EOF
         log_info "fail2ban sshd configuration seems to exist in $JAIL_LOCAL_CONF or is managed elsewhere. No changes made."
     fi
 
+    # --- Unattended Upgrades (Automatic Security Updates) ---
+    if [ "$SETUP_UNATTENDED_UPGRADES" = true ]; then
+        log_info "Configuring automatic security updates (unattended-upgrades)..."
+        sudo apt install -y unattended-upgrades apt-listchanges
+        sudo dpkg-reconfigure -plow unattended-upgrades
+        log_success "Automatic security updates enabled."
+    fi
+
     # --- Create System Logs Directory for current user ---
     log_info "Creating system logs directory for current user ($USER)..."
     LOGS_DIR="$HOME/system_logs"
     mkdir -p "$LOGS_DIR"
     add_cleanup_action_on_failure "log_warning 'Removing system_logs directory for $USER'; rm -rf '$LOGS_DIR'"
-    # Subsequent file creations in LOGS_DIR don't need individual cleanup if the dir is removed.
     date > "$LOGS_DIR/setup_complete_date.log"
-    # ... other log files ...
+    uname -a > "$LOGS_DIR/system_info.log"
+    cat /proc/cpuinfo > "$LOGS_DIR/cpu_info.log" 2>/dev/null
+    free -h > "$LOGS_DIR/memory_info.log"
+    df -h > "$LOGS_DIR/disk_info.log"
+    ip addr > "$LOGS_DIR/network_info.log" 2>/dev/null
+    if command -v docker &> /dev/null; then
+        docker info > "$LOGS_DIR/docker_info.log" 2>/dev/null || true
+    fi
+    # Record what was installed
+    {
+        echo "NexusCore Setup - $(date)"
+        echo "User: $ADMIN_USER"
+        echo "Hostname: $(hostname)"
+        echo "Python: $INSTALL_PYTHON"
+        echo "Java: $INSTALL_JAVA"
+        echo "Go: $INSTALL_GO"
+        echo "Node.js: $INSTALL_NODEJS"
+        echo "C/C++: $INSTALL_CPP"
+        echo "Docker: $INSTALL_DOCKER"
+        echo "Miniconda: $INSTALL_MINICONDA"
+        echo "Nginx: $INSTALL_NGINX"
+        echo "Cloudflared: $INSTALL_CLOUDFLARED"
+        echo "Monitoring: $INSTALL_MONITORING_TOOLS"
+        echo "UFW: $SETUP_UFW"
+        echo "SSH Hardened: $CONFIGURE_SSH"
+        echo "Swap: $SETUP_SWAP ($SWAP_SIZE)"
+        echo "Auto-updates: $SETUP_UNATTENDED_UPGRADES"
+    } > "$LOGS_DIR/nexuscore_config.log"
     log_success "System logs directory created at $LOGS_DIR for user $USER"
 
     # If script reaches here, all main operations were successful
@@ -610,13 +786,27 @@ main_entry_point() {
         echo -e "\033[1;32mHostname:\033[0m $(hostname)"
         SERVER_IPS=$(hostname -I)
         echo -e "\033[1;32mServer IP Addresses:\033[0m $SERVER_IPS"
-        if command -v neofetch &> /dev/null; then neofetch; else lsb_release -a; uname -a; fi
+        echo -e "\033[1;32mTimezone:\033[0m $(cat /etc/timezone 2>/dev/null || timedatectl show --property=Timezone --value 2>/dev/null || echo 'N/A')"
+        if [ -f /swapfile ]; then
+            echo -e "\033[1;32mSwap:\033[0m $(swapon --show=SIZE --noheadings 2>/dev/null || echo 'active')"
+        fi
+        echo
+        if command -v neofetch &> /dev/null; then neofetch; else lsb_release -a 2>/dev/null; uname -a; fi
 
         log_info "-------------------- IMPORTANT NEXT STEPS --------------------"
-        echo -e "\033[1;33m1. Reload your shell:\033[0m source ~/.bashrc"
+        local step=1
+        echo -e "\033[1;33m${step}. Reload your shell:\033[0m source ~/.bashrc"; ((step++))
         if [ "$INSTALL_DOCKER" = true ]; then
-            echo -e "\033[1;33m2. Apply Docker group:\033[0m newgrp docker  (or log out and back in)"
+            echo -e "\033[1;33m${step}. Apply Docker group:\033[0m newgrp docker  (or log out and back in)"; ((step++))
         fi
+        if [ "$CONFIGURE_SSH" = true ] && [ "$ENABLE_PASSWORD_AUTH" = false ]; then
+            echo -e "\033[1;33m${step}. Setup SSH keys:\033[0m ssh-copy-id $USER@$(hostname -I | awk '{print $1}')"; ((step++))
+            echo -e "   \033[1;31m⚠ Password auth is DISABLED. Ensure you have SSH key access before disconnecting!\033[0m"
+        fi
+        if [ "$INSTALL_NGINX" = true ]; then
+            echo -e "\033[1;33m${step}. Nginx is running:\033[0m http://$(hostname -I | awk '{print $1}')"; ((step++))
+        fi
+        echo -e "\033[1;33m${step}. View system logs:\033[0m ls ~/system_logs/"; ((step++))
 
         echo
         log_info "NexusCore Setup Process Completed for user $USER."
