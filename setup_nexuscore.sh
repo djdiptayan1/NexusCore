@@ -255,7 +255,7 @@ interactive_setup() {
     echo -e "  User:              $ADMIN_USER"
     [ "$SETUP_HOSTNAME" = true ] && echo -e "  Hostname:          $NEW_HOSTNAME"
     echo -e "  Timezone:          $SETUP_TIMEZONE"
-    echo -e "  Swap ($SWAP_SIZE):        $SETUP_SWAP"
+    echo -e "  Swap:              $SETUP_SWAP ($SWAP_SIZE)"
     echo -e "  SSH Hardening:     $CONFIGURE_SSH"
     echo -e "  UFW Firewall:      $SETUP_UFW"
     echo -e "  Auto-updates:      $SETUP_UNATTENDED_UPGRADES"
@@ -853,7 +853,7 @@ main_entry_point() {
         fi
         if [ "$CONFIGURE_SSH" = true ] && [ "$ENABLE_PASSWORD_AUTH" = false ]; then
             echo -e "   \033[1;31m⚠ Password auth is DISABLED. Ensure you have SSH key access before disconnecting!\033[0m"
-            echo -e "\033[1;33m${step}. Setup SSH keys (from your local machine):\033[0m ssh-copy-id your-user@$(hostname -I | awk '{print $1}')"; ((step++))
+            echo -e "\033[1;33m${step}. Setup SSH keys (from your local machine):\033[0m ssh-copy-id ${ADMIN_USER}@$(hostname -I | awk '{print $1}')"; ((step++))
         fi
         if [ "$INSTALL_NGINX" = true ]; then
             echo -e "\033[1;33m${step}. Nginx is running:\033[0m http://$(hostname -I | awk '{print $1}')"; ((step++))
