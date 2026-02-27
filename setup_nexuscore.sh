@@ -1,29 +1,33 @@
-# NexusCore Setup Script v2.1 for Ubuntu 24.04.2 LTS
-# With cleanup-on-failure mechanism
+# NexusCore Setup Script v3.2 for Ubuntu 24.04.2 LTS
+# Resilient single-user setup with interactive prompts
+# Components are isolated — a failure in one does not stop the rest
 
-# Exit on any error (globally, but main operations will be in a function with set -e),
 # treat unset variables as an error, and ensure pipelines fail on error.
-# set -euo pipefail # We will manage 'e' more granularly.
 set -uo pipefail
 
-# --- Configuration ---
-ADMIN_USER="djdiptayan"
-ADDITIONAL_USER="anwin"
+# --- Configuration (defaults, overridden by interactive prompts) ---
+ADMIN_USER="$USER"
 JAVA_VERSION="17"
-INSTALL_DOCKER=true
-INSTALL_PYTHON=true
-INSTALL_MINICONDA=true
-INSTALL_JAVA=true
-INSTALL_CPP=true
-INSTALL_NODEJS=true
-INSTALL_CLOUDFLARED=true
-INSTALL_MONITORING_TOOLS=true
-SETUP_UFW=true
+GO_VERSION="1.23.6"
+INSTALL_DOCKER=false
+INSTALL_PYTHON=false
+INSTALL_MINICONDA=false
+INSTALL_JAVA=false
+INSTALL_GO=false
+INSTALL_CPP=false
+INSTALL_NODEJS=false
+INSTALL_CLOUDFLARED=false
+INSTALL_MONITORING_TOOLS=false
+INSTALL_NGINX=false
+SETUP_UFW=false
+SETUP_SWAP=false
+SWAP_SIZE="2G"
+SETUP_TIMEZONE=false
+SETUP_HOSTNAME=false
+NEW_HOSTNAME=""
+SETUP_UNATTENDED_UPGRADES=false
+CONFIGURE_SSH=false
 ENABLE_PASSWORD_AUTH=true
-
-INSTALL_AMD_GPU_DRIVERS=true
-AMD_GPU_INSTALLER_FULL_URL="https://repo.radeon.com/amdgpu-install/6.4.1/ubuntu/noble/amdgpu-install_6.4.60401-1_all.deb"
-AMD_GPU_INSTALLER_FILENAME="amdgpu-install_6.4.60401-1_all.deb"
 
 # --- Cleanup Handler ---
 declare -a CLEANUP_ACTIONS_ON_FAILURE # Stores commands or function calls for cleanup
@@ -66,6 +70,45 @@ add_cleanup_action_on_failure() {
     CLEANUP_ACTIONS_ON_FAILURE+=("$1")
 }
 
+# --- Component Tracking ---
+declare -a SUCCEEDED_COMPONENTS=()
+declare -a FAILED_COMPONENTS=()
+declare -a SKIPPED_COMPONENTS=()
+
+# Run an optional component in isolation. If it fails, log the error and continue.
+# Usage: run_component "Component Name" component_function_or_commands
+run_component() {
+    local name="$1"
+    shift
+    log_info "────────────────────────────────────────"
+    log_info "Setting up: $name"
+    log_info "────────────────────────────────────────"
+    # Run in a subshell so set -e failures don't kill the parent
+    if ( set -e; "$@" ); then
+        log_success "$name — done."
+        SUCCEEDED_COMPONENTS+=("$name")
+    else
+        log_error "$name — FAILED. Continuing with remaining components..."
+        FAILED_COMPONENTS+=("$name")
+    fi
+}
+
+# Retry wrapper for apt operations (handles dpkg lock contention)
+apt_retry() {
+    local max_attempts=3
+    local attempt=1
+    while [ $attempt -le $max_attempts ]; do
+        if sudo apt-get "$@"; then
+            return 0
+        fi
+        log_warning "apt command failed (attempt $attempt/$max_attempts). Retrying in 10 seconds..."
+        sleep 10
+        ((attempt++))
+    done
+    log_error "apt command failed after $max_attempts attempts."
+    return 1
+}
+
 # --- Helper Functions ---
 log_info() {
     echo -e "\n\033[1;34m[INFO]\033[0m $1"
@@ -100,7 +143,140 @@ print_banner() {
     echo "██  ██ ██ ██       ██ ██  ██    ██      ██ ██      ██    ██ ██   ██ ██      "
     echo "██   ████ ███████ ██   ██  ██████  ███████  ██████  ██████  ██   ██ ███████ "
     echo -e "\033[0m"
-    echo -e "\033[1;36mAdvanced Server Setup Script v2.1 for Ubuntu 24.04.2 LTS\033[0m"
+    echo -e "\033[1;36mComplete Server Setup Script v3.2 for Ubuntu 24.04.2 LTS\033[0m"
+    echo
+}
+
+# --- Interactive Prompts ---
+ask_yes_no() {
+    local prompt="$1"
+    local default="${2:-n}"
+    local reply
+    if [ "$default" = "y" ]; then
+        read -p "$prompt [Y/n]: " -r reply
+        [[ -z "$reply" || "$reply" =~ ^[Yy]$ ]]
+    else
+        read -p "$prompt [y/N]: " -r reply
+        [[ "$reply" =~ ^[Yy]$ ]]
+    fi
+}
+
+interactive_setup() {
+    echo -e "\033[1;36m========================================\033[0m"
+    echo -e "\033[1;36m  NexusCore Interactive Setup\033[0m"
+    echo -e "\033[1;36m========================================\033[0m"
+    echo
+    echo -e "\033[1;33m--- Server Configuration ---\033[0m"
+    echo
+
+    if ask_yes_no "  Set a custom hostname for this server?"; then
+        read -p "    Enter hostname: " -r NEW_HOSTNAME
+        if [ -n "$NEW_HOSTNAME" ]; then
+            SETUP_HOSTNAME=true
+        fi
+    fi
+
+    if ask_yes_no "  Configure timezone?"; then
+        SETUP_TIMEZONE=true
+    fi
+
+    if ask_yes_no "  Create a swap file? (recommended for VPS with limited RAM)"; then
+        SETUP_SWAP=true
+        read -p "    Swap size (e.g. 1G, 2G, 4G) [2G]: " -r swap_input
+        [ -n "$swap_input" ] && SWAP_SIZE="$swap_input"
+    fi
+
+    if ask_yes_no "  Harden SSH configuration?"; then
+        CONFIGURE_SSH=true
+        if ask_yes_no "    Disable SSH password authentication? (key-only access)"; then
+            ENABLE_PASSWORD_AUTH=false
+        fi
+    fi
+
+    if ask_yes_no "  Setup UFW firewall?"; then
+        SETUP_UFW=true
+    fi
+
+    if ask_yes_no "  Enable automatic security updates (unattended-upgrades)?"; then
+        SETUP_UNATTENDED_UPGRADES=true
+    fi
+
+    echo
+    echo -e "\033[1;33m--- Development Tools ---\033[0m"
+    echo
+
+    if ask_yes_no "  Install Python 3 (pip, venv, dev headers)?"; then
+        INSTALL_PYTHON=true
+    fi
+
+    if ask_yes_no "  Install Java (OpenJDK $JAVA_VERSION)?"; then
+        INSTALL_JAVA=true
+    fi
+
+    if ask_yes_no "  Install Go ($GO_VERSION)?"; then
+        INSTALL_GO=true
+    fi
+
+    if ask_yes_no "  Install Node.js (via NVM)?"; then
+        INSTALL_NODEJS=true
+    fi
+
+    if ask_yes_no "  Install C/C++ toolchain (gcc, g++, clang)?"; then
+        INSTALL_CPP=true
+    fi
+
+    if ask_yes_no "  Install Docker & Docker Compose?"; then
+        INSTALL_DOCKER=true
+    fi
+
+    if ask_yes_no "  Install Miniconda (Python environment manager)?"; then
+        INSTALL_MINICONDA=true
+    fi
+
+    echo
+    echo -e "\033[1;33m--- Server Software ---\033[0m"
+    echo
+
+    if ask_yes_no "  Install Nginx web server?"; then
+        INSTALL_NGINX=true
+    fi
+
+    if ask_yes_no "  Install Cloudflared (Cloudflare Tunnel)?"; then
+        INSTALL_CLOUDFLARED=true
+    fi
+
+    if ask_yes_no "  Install monitoring tools (htop, glances, bpytop, nload)?"; then
+        INSTALL_MONITORING_TOOLS=true
+    fi
+
+    echo
+    echo -e "\033[1;32mSetup configuration:\033[0m"
+    echo -e "  \033[1;36m[Server]\033[0m"
+    echo -e "  User:              $ADMIN_USER"
+    [ "$SETUP_HOSTNAME" = true ] && echo -e "  Hostname:          $NEW_HOSTNAME"
+    echo -e "  Timezone:          $SETUP_TIMEZONE"
+    echo -e "  Swap:              $SETUP_SWAP ($SWAP_SIZE)"
+    echo -e "  SSH Hardening:     $CONFIGURE_SSH"
+    echo -e "  UFW Firewall:      $SETUP_UFW"
+    echo -e "  Auto-updates:      $SETUP_UNATTENDED_UPGRADES"
+    echo -e "  \033[1;36m[Development]\033[0m"
+    echo -e "  Python:            $INSTALL_PYTHON"
+    echo -e "  Java:              $INSTALL_JAVA"
+    echo -e "  Go:                $INSTALL_GO"
+    echo -e "  Node.js:           $INSTALL_NODEJS"
+    echo -e "  C/C++:             $INSTALL_CPP"
+    echo -e "  Docker:            $INSTALL_DOCKER"
+    echo -e "  Miniconda:         $INSTALL_MINICONDA"
+    echo -e "  \033[1;36m[Software]\033[0m"
+    echo -e "  Nginx:             $INSTALL_NGINX"
+    echo -e "  Cloudflared:       $INSTALL_CLOUDFLARED"
+    echo -e "  Monitoring tools:  $INSTALL_MONITORING_TOOLS"
+    echo
+
+    if ! ask_yes_no "  Proceed with installation?" "y"; then
+        log_info "Setup cancelled by user."
+        exit 0
+    fi
     echo
 }
 
@@ -165,322 +341,269 @@ backup_file() {
     fi
 }
 
-# --- Main Operations Function ---
-# This function will contain all the core setup logic.
-# It will run with 'set -e' so any error triggers the ERR trap and then exits this function.
-run_main_operations() {
-    set -e # Critical: enable exit on error for this block
+# ============================================================================
+# Component installer functions (each runs in isolation via run_component)
+# ============================================================================
 
-    print_banner
-    check_os_compatibility # This function now returns 1 on failure
-
-    log_info "Starting NexusCore Advanced Server Setup v2.1 for users: $ADMIN_USER and $ADDITIONAL_USER"
-    log_info "This script should be run by the user who will be '$ADMIN_USER'."
-    if [ "$(id -u)" = "0" ]; then
-       log_error "This script should not be run as root. Run as a sudo-enabled user (preferably as '$ADMIN_USER')."
-       exit 1 # Exit immediately, no cleanup needed from script itself.
-    fi
-
-    if [ "$USER" != "$ADMIN_USER" ]; then
-        log_warning "You are running this script as user '$USER', but ADMIN_USER is set to '$ADMIN_USER'."
-        log_warning "NVM and Miniconda for the current user ('$USER') will be set up. '$ADMIN_USER' will not get this specific setup unless '$USER' is '$ADMIN_USER'."
-        log_warning "Consider running this script as '$ADMIN_USER', or manually run 'setup_user_environment \"$ADMIN_USER\"' later if needed."
-        read -p "Continue? (y/N): " -r
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            exit 1 # User chose to exit.
+install_hostname() {
+    if [ -n "$NEW_HOSTNAME" ]; then
+        local old_hostname
+        old_hostname=$(hostname)
+        sudo hostnamectl set-hostname "$NEW_HOSTNAME"
+        if grep -qw "$old_hostname" /etc/hosts; then
+            backup_file "/etc/hosts"
+            sudo sed -i "s/\b${old_hostname}\b/$NEW_HOSTNAME/g" /etc/hosts
         fi
+        log_success "Hostname set to $NEW_HOSTNAME."
     fi
+}
 
-    if ! sudo -n true 2>/dev/null; then
-        log_warning "Sudo access for $USER requires a password. You may be prompted multiple times."
+install_timezone() {
+    log_info "You will be prompted to select your timezone..."
+    sudo dpkg-reconfigure tzdata
+    log_success "Timezone configured to $(cat /etc/timezone 2>/dev/null || timedatectl show --property=Timezone --value)."
+}
+
+install_swap() {
+    log_info "Creating $SWAP_SIZE swap file..."
+    sudo fallocate -l "$SWAP_SIZE" /swapfile
+    sudo chmod 600 /swapfile
+    sudo mkswap /swapfile
+    sudo swapon /swapfile
+    if ! grep -q '/swapfile' /etc/fstab; then
+        backup_file "/etc/fstab"
+        echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab > /dev/null
     fi
+    if ! grep -q 'vm.swappiness' /etc/sysctl.conf; then
+        echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf > /dev/null
+        sudo sysctl vm.swappiness=10
+    fi
+    log_success "Swap file ($SWAP_SIZE) created and enabled."
+}
 
-    # Create the additional user early
-    if [ -n "$ADDITIONAL_USER" ]; then
-        create_restricted_sudo_user "$ADDITIONAL_USER" # This function will also use add_cleanup_action_on_failure
+install_ssh_hardening() {
+    local sshd_config="/etc/ssh/sshd_config"
+    backup_file "$sshd_config"
+    sudo sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' "$sshd_config"
+    if [ "$ENABLE_PASSWORD_AUTH" = true ]; then
+        sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' "$sshd_config"
     else
-        log_info "ADDITIONAL_USER variable is empty. Skipping creation of additional user."
+        sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' "$sshd_config"
     fi
+    sudo sed -i 's/^#\?PermitEmptyPasswords.*/PermitEmptyPasswords no/' "$sshd_config"
+    sudo sed -i 's/^#\?MaxAuthTries.*/MaxAuthTries 5/' "$sshd_config"
+    sudo systemctl restart sshd
+    log_success "SSH hardened (RootLogin=no, PasswordAuth=$ENABLE_PASSWORD_AUTH, EmptyPasswords=no, MaxAuthTries=5)."
+}
 
-    log_info "Updating package lists and upgrading existing packages..."
-    sudo apt update
-    sudo apt upgrade -y
-    log_success "System updated and upgraded."
+install_ufw() {
+    if ! command -v ufw &> /dev/null; then sudo apt install -y ufw; fi
+    sudo ufw allow ssh
+    sudo ufw allow 80/tcp
+    sudo ufw allow 443/tcp
+    sudo ufw --force enable
+    sudo ufw status verbose
+    log_success "UFW configured and enabled."
+}
 
-    # --- Install Basic Utilities & Build Tools ---
-    log_info "Installing essential packages, development tools, and neofetch..."
-    sudo apt install -y \
-        git curl wget build-essential software-properties-common apt-transport-https \
-        ca-certificates gnupg lsb-release unzip zip make cmake pkg-config autoconf automake \
-        libtool gettext tree htop btop nvtop iotop iftop ncdu gnupg2 pass neofetch
-    # No specific cleanup for apt packages generally, too complex/risky.
-    log_success "Essential packages, development tools, and neofetch installed."
-
-    # --- Firewall (UFW) ---
-    if [ "$SETUP_UFW" = true ]; then
-        log_info "Setting up UFW (Uncomplicated Firewall)..."
-        if ! command -v ufw &> /dev/null; then sudo apt install -y ufw; fi
-        
-        sudo ufw allow ssh
-        add_cleanup_action_on_failure "sudo ufw delete allow ssh"
-        sudo ufw allow 80/tcp
-        add_cleanup_action_on_failure "sudo ufw delete allow 80/tcp"
-        sudo ufw allow 443/tcp
-        add_cleanup_action_on_failure "sudo ufw delete allow 443/tcp"
-        
-        # Store current UFW status to decide if we need to disable it on cleanup
-        local ufw_was_active_before_enable=false
-        if sudo ufw status | grep -qw active; then
-            ufw_was_active_before_enable=true
-        fi
-
-        sudo ufw --force enable
-        # If enable succeeded, but a later step fails:
-        # Only disable UFW if it wasn't active before we enabled it.
-        if [ "$ufw_was_active_before_enable" = false ]; then
-            add_cleanup_action_on_failure "log_warning 'Disabling UFW as it was enabled by this script run.'; sudo ufw --force disable"
-        else
-            add_cleanup_action_on_failure "log_info 'UFW was active before this script run, not disabling it during cleanup.'"
-        fi
-        
-        sudo ufw status verbose
-        log_success "UFW configured and enabled."
-    else
-        log_info "Skipping UFW setup as per configuration."
+install_python() {
+    if command -v python3 &> /dev/null && dpkg -s python3-pip &> /dev/null; then
+        log_info "Python 3 and pip already installed. Ensuring venv and dev headers..."
     fi
+    sudo apt install -y python3 python3-pip python3-venv python3-dev
+    log_success "Python 3, pip, venv, and dev headers are set up."
+}
 
-    # --- Install Programming Languages & Runtimes ---
-    # Python
-    if [ "$INSTALL_PYTHON" = true ]; then
-        log_info "Ensuring Python 3, pip, venv, and dev headers are installed..."
-        sudo apt install -y python3 python3-pip python3-venv python3-dev
-        log_success "Python 3, pip, venv, and dev headers are set up."
+install_java() {
+    if java -version 2>&1 | grep -q "openjdk version"; then
+        log_info "Java already installed: $(java -version 2>&1 | head -1)"
     fi
+    sudo apt install -y "openjdk-${JAVA_VERSION}-jdk" "openjdk-${JAVA_VERSION}-jre"
+    log_success "OpenJDK $JAVA_VERSION (JDK & JRE) installed."
+}
 
-    # Java
-    if [ "$INSTALL_JAVA" = true ]; then
-        log_info "Installing OpenJDK $JAVA_VERSION..."
-        sudo apt install -y "openjdk-${JAVA_VERSION}-jdk" "openjdk-${JAVA_VERSION}-jre"
-        log_success "OpenJDK $JAVA_VERSION (JDK & JRE) installed."
-    fi
+install_cpp() {
+    sudo apt install -y gcc g++ gdb clang valgrind
+    log_success "C/C++ toolchain installed."
+}
 
-    # C/C++
-    if [ "$INSTALL_CPP" = true ]; then
-        log_info "Ensuring C/C++ toolchain (gcc, g++, gdb, clang, valgrind) is installed..."
-        sudo apt install -y gcc g++ gdb clang valgrind
-        log_success "C/C++ toolchain installed."
-    fi
-    
-    # Node.js (via NVM) - for current user (assumed to be ADMIN_USER)
-    if [ "$INSTALL_NODEJS" = true ]; then
-        log_info "Installing Node.js via NVM for current user ($USER)..."
-        export NVM_DIR="$HOME/.nvm" # Ensure NVM_DIR is set for the script's operations
-        
-        # Backup relevant shell configuration files before modification
+install_go() {
+    local go_tar="go${GO_VERSION}.linux-$(dpkg --print-architecture).tar.gz"
+    local go_tmp_path="/tmp/$go_tar"
+    wget -O "$go_tmp_path" "https://go.dev/dl/$go_tar"
+    sudo rm -rf /usr/local/go
+    sudo tar -C /usr/local -xzf "$go_tmp_path"
+    rm -f "$go_tmp_path"
+    if ! grep -q '/usr/local/go/bin' "$HOME/.bashrc"; then
         backup_file "$HOME/.bashrc" "$USER"
-        if [ -f "$HOME/.zshrc" ]; then
-            backup_file "$HOME/.zshrc" "$USER"
-        fi
+        echo 'export PATH=$PATH:/usr/local/go/bin' >> "$HOME/.bashrc"
+    fi
+    export PATH=$PATH:/usr/local/go/bin
+    if command -v go &> /dev/null; then
+        log_success "Go $(go version) installed."
+    else
+        log_error "Go installation failed."
+        return 1
+    fi
+}
 
-        if [ ! -d "$NVM_DIR" ]; then
-            mkdir -p "$NVM_DIR" # NVM installer needs this
-            # If mkdir fails, set -e will halt.
-            add_cleanup_action_on_failure "log_warning 'Removing NVM directory for current user $USER'; rm -rf '$NVM_DIR'"
-            
-            # The NVM install script itself appends to rc files. The backup/restore handles this.
-            curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
-            # Source NVM for the current script session to install Node
-            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-            [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
-
-            if command -v nvm &> /dev/null; then
-                set +u # NVM scripts might use unbound variables
-                nvm install --lts && nvm use --lts && nvm alias default 'lts/*'
-                set -u
-                log_success "Node.js LTS installed via NVM and activated for this session."
-            else 
-                log_error "NVM installation command ran, but NVM command not found. NVM setup failed for current user."
-                # This will cause script to exit due to set -e if nvm install returned error, or if we return 1
-                return 1 # Explicitly fail
-            fi
-        else
-            log_info "NVM already installed for current user. Sourcing and ensuring LTS Node.js."
-            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+install_nodejs() {
+    export NVM_DIR="$HOME/.nvm"
+    backup_file "$HOME/.bashrc" "$USER"
+    if [ -f "$HOME/.zshrc" ]; then
+        backup_file "$HOME/.zshrc" "$USER"
+    fi
+    if [ ! -d "$NVM_DIR" ]; then
+        mkdir -p "$NVM_DIR"
+        curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+        [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+        if command -v nvm &> /dev/null; then
             set +u
-            if ! nvm ls 'lts/*' &> /dev/null || ! (nvm current | grep -qE 'lts|node'); then
-                nvm install --lts && nvm use --lts && nvm alias default 'lts/*'
-            elif ! (nvm current | grep -q 'lts'); then
-                nvm use 'lts/*' && nvm alias default 'lts/*'
-            fi
+            nvm install --lts && nvm use --lts && nvm alias default 'lts/*'
             set -u
-            log_success "NVM sourced, Node.js LTS configured and activated for this session."
-        fi
-        
-        # Global npm packages
-        if command -v npm &> /dev/null; then
-            log_info "Installing global npm packages: yarn, typescript, ts-node, nodemon, pm2..."
-            ( # Subshell to keep NVM sourcing local if needed, though already sourced
-              [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-              set +u 
-              npm install -g yarn typescript ts-node nodemon pm2
-              set -u
-            )
-            log_success "Installed global npm packages."
+            log_success "Node.js LTS installed via NVM."
         else
-            log_warning "npm command not found after NVM setup. Skipping global npm packages."
+            log_error "NVM command not found after install."
+            return 1
         fi
+    else
+        log_info "NVM already installed. Sourcing and ensuring LTS Node.js."
+        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+        set +u
+        if ! nvm ls 'lts/*' &> /dev/null || ! (nvm current | grep -qE 'lts|node'); then
+            nvm install --lts && nvm use --lts && nvm alias default 'lts/*'
+        elif ! (nvm current | grep -q 'lts'); then
+            nvm use 'lts/*' && nvm alias default 'lts/*'
+        fi
+        set -u
+        log_success "NVM sourced, Node.js LTS configured."
     fi
-
-    # --- Install AMD GPU Drivers (Optional) ---
-    if [ "$INSTALL_AMD_GPU_DRIVERS" = true ]; then
-        install_amd_gpu_drivers # This function should also manage its own cleanup registrations
+    # Global npm packages
+    if command -v npm &> /dev/null; then
+        log_info "Installing global npm packages..."
+        (
+          [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+          set +u
+          npm install -g yarn typescript ts-node nodemon pm2
+          set -u
+        )
+        log_success "Installed global npm packages."
+    else
+        log_warning "npm not found. Skipping global npm packages."
     fi
+}
 
-    # Docker & Docker Compose
-    if [ "$INSTALL_DOCKER" = true ]; then
-        log_info "Installing Docker and Docker Compose..."
-        local docker_gpg_key_path="/etc/apt/keyrings/docker.gpg"
-        local docker_repo_list_path="/etc/apt/sources.list.d/docker.list"
-        local docker_group_created_by_script=false
-
-        sudo install -m 0755 -d /etc/apt/keyrings
-        if [ ! -f "$docker_gpg_key_path" ]; then
-            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o "$docker_gpg_key_path"
-            sudo chmod a+r "$docker_gpg_key_path"
-            add_cleanup_action_on_failure "log_warning 'Removing Docker GPG key'; sudo rm -f '$docker_gpg_key_path'"
-        fi
-        if [ ! -f "$docker_repo_list_path" ]; then
-            echo \
-              "deb [arch=$(dpkg --print-architecture) signed-by=$docker_gpg_key_path] https://download.docker.com/linux/ubuntu \
-              $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-              sudo tee "$docker_repo_list_path" > /dev/null
-            add_cleanup_action_on_failure "log_warning 'Removing Docker apt repository list'; sudo rm -f '$docker_repo_list_path'"
-            sudo apt update
-        fi
-        sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-        # No specific cleanup for docker packages, too complex. If GPG/repo list were added, they'd be removed.
-        
-        if ! getent group docker > /dev/null; then
-            sudo groupadd docker
-            add_cleanup_action_on_failure "log_warning 'Removing docker group created by script'; sudo groupdel docker"
-            docker_group_created_by_script=true # Track if we created it
-            log_info "Created docker group."
-        fi
-        for user_to_add_docker_group in "$ADMIN_USER" "$ADDITIONAL_USER" "$USER"; do # Add current user too
-            if [ -n "$user_to_add_docker_group" ] && id "$user_to_add_docker_group" &>/dev/null; then
-                if ! groups "$user_to_add_docker_group" | grep -q '\bdocker\b'; then
-                    sudo usermod -aG docker "$user_to_add_docker_group"
-                    # Undoing usermod -aG is tricky; typically not done in simple cleanup.
-                    # If the group itself was created by script and is removed, that's the main part.
-                    log_info "User $user_to_add_docker_group added to docker group."
-                fi
-            fi
-        done
-        # Remove duplicates from the list of users for docker group
-        # Handled by iterating unique users above.
-
+install_docker() {
+    if command -v docker &> /dev/null; then
+        log_info "Docker already installed: $(docker --version). Ensuring service is running..."
         sudo systemctl enable --now docker
-        add_cleanup_action_on_failure "log_warning 'Disabling and stopping Docker service'; sudo systemctl disable --now docker"
-        log_success "Docker and Docker Compose installed and service enabled/started."
+        if id "$ADMIN_USER" &>/dev/null && ! groups "$ADMIN_USER" | grep -q '\bdocker\b'; then
+            sudo usermod -aG docker "$ADMIN_USER"
+            log_info "User $ADMIN_USER added to docker group."
+        fi
+        log_success "Docker is ready."
+        return 0
     fi
+    local docker_gpg_key_path="/etc/apt/keyrings/docker.gpg"
+    local docker_repo_list_path="/etc/apt/sources.list.d/docker.list"
+    sudo install -m 0755 -d /etc/apt/keyrings
+    if [ ! -f "$docker_gpg_key_path" ]; then
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o "$docker_gpg_key_path"
+        sudo chmod a+r "$docker_gpg_key_path"
+    fi
+    if [ ! -f "$docker_repo_list_path" ]; then
+        echo \
+          "deb [arch=$(dpkg --print-architecture) signed-by=$docker_gpg_key_path] https://download.docker.com/linux/ubuntu \
+          $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+          sudo tee "$docker_repo_list_path" > /dev/null
+        sudo apt update
+    fi
+    sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    if ! getent group docker > /dev/null; then
+        sudo groupadd docker
+        log_info "Created docker group."
+    fi
+    if id "$ADMIN_USER" &>/dev/null && ! groups "$ADMIN_USER" | grep -q '\bdocker\b'; then
+        sudo usermod -aG docker "$ADMIN_USER"
+        log_info "User $ADMIN_USER added to docker group."
+    fi
+    sudo systemctl enable --now docker
+    log_success "Docker and Docker Compose installed and running."
+}
 
-    # Miniconda - for current user (assumed to be ADMIN_USER)
-    if [ "$INSTALL_MINICONDA" = true ]; then
-        log_info "Installing Miniconda for current user ($USER)..."
-        CONDA_DIR="$HOME/miniconda3"
-        
-        # Backup shell config files before Miniconda modifies them
-        backup_file "$HOME/.bashrc" "$USER"
+install_miniconda() {
+    CONDA_DIR="$HOME/miniconda3"
+    backup_file "$HOME/.bashrc" "$USER"
+    if [ -f "$HOME/.zshrc" ]; then
+        backup_file "$HOME/.zshrc" "$USER"
+    fi
+    if [ ! -d "$CONDA_DIR/bin" ]; then
+        local miniconda_tmp_dir="$HOME/miniconda_tmp"
+        mkdir -p "$miniconda_tmp_dir"
+        wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O "$miniconda_tmp_dir/miniconda_installer.sh"
+        bash "$miniconda_tmp_dir/miniconda_installer.sh" -b -u -p "$CONDA_DIR"
+        rm -rf "$miniconda_tmp_dir"
+        eval "$("$CONDA_DIR/bin/conda" 'shell.bash' 'hook')"
+        "$CONDA_DIR/bin/conda" init bash
         if [ -f "$HOME/.zshrc" ]; then
-            backup_file "$HOME/.zshrc" "$USER"
+            "$CONDA_DIR/bin/conda" init zsh
         fi
-
-        if [ ! -d "$CONDA_DIR/bin" ]; then
-            local miniconda_tmp_dir="$HOME/miniconda_tmp"
-            mkdir -p "$miniconda_tmp_dir"
-            add_cleanup_action_on_failure "log_warning 'Removing Miniconda temp download dir'; rm -rf '$miniconda_tmp_dir'"
-            
-            wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O "$miniconda_tmp_dir/miniconda_installer.sh"
-            # If wget fails, set -e halts, cleanup for $miniconda_tmp_dir runs.
-            
-            bash "$miniconda_tmp_dir/miniconda_installer.sh" -b -u -p "$CONDA_DIR"
-            # If bash installer fails, set -e halts. $CONDA_DIR might be partially created.
-            add_cleanup_action_on_failure "log_warning 'Removing Miniconda directory for $USER'; rm -rf '$CONDA_DIR'"
-            
-            rm -rf "$miniconda_tmp_dir" # Clean up installer and temp dir now
-            # We need to remove the cleanup action for miniconda_tmp_dir if we manually delete it.
-            # Simpler: don't manually delete. Let cleanup handle it if script fails.
-            # If script succeeds, SCRIPT_SUCCESSFUL=true prevents cleanup.
-            # So, it's fine to leave the add_cleanup_action for miniconda_tmp_dir.
-
-            eval "$("$CONDA_DIR/bin/conda" 'shell.bash' 'hook')"
-            "$CONDA_DIR/bin/conda" init bash
-            if [ -f "$HOME/.zshrc" ]; then
-                "$CONDA_DIR/bin/conda" init zsh
-            fi
-            log_success "Miniconda installed to $CONDA_DIR and shell initialised."
-        else
-            log_info "Miniconda already installed for current user. Sourcing for current session."
-            eval "$("$CONDA_DIR/bin/conda" 'shell.bash' 'hook')"
-        fi
-        
-        if command -v conda &> /dev/null; then
-            conda config --set auto_activate_base false
-            log_success "Configured conda to not auto-activate base environment for current user."
-        else
-            log_warning "Conda command not found. Could not set auto_activate_base for current user."
-        fi
+        log_success "Miniconda installed to $CONDA_DIR."
+    else
+        log_info "Miniconda already installed. Sourcing."
+        eval "$("$CONDA_DIR/bin/conda" 'shell.bash' 'hook')"
     fi
-
-    # --- Monitoring Tools ---
-    if [ "$INSTALL_MONITORING_TOOLS" = true ]; then
-        log_info "Installing additional monitoring tools (glances, bpytop, radeontop, lm-sensors)..."
-        sudo apt install -y glances bpytop radeontop lm-sensors
-        log_success "Additional monitoring tools installed."
+    if command -v conda &> /dev/null; then
+        conda config --set auto_activate_base false
+        log_success "Configured conda auto_activate_base=false."
+    else
+        log_warning "Conda command not found after install."
     fi
+}
 
-    # --- Install Cloudflared ---
-    if [ "$INSTALL_CLOUDFLARED" = true ]; then
-        log_info "Installing cloudflared..."
-        if ! command -v cloudflared &> /dev/null; then
-            ARCH=$(dpkg --print-architecture)
-            CLOUDFLARED_LATEST_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}.deb"
-            local cloudflared_deb_path="/tmp/cloudflared.deb"
-            
-            wget -O "$cloudflared_deb_path" "${CLOUDFLARED_LATEST_URL}"
-            add_cleanup_action_on_failure "log_warning 'Removing downloaded cloudflared deb'; rm -f '$cloudflared_deb_path'"
-            
-            sudo dpkg -i "$cloudflared_deb_path"
-            # If dpkg succeeds, register cleanup for the package
-            add_cleanup_action_on_failure "log_warning 'Purging cloudflared package'; sudo apt-get purge -y cloudflared && sudo apt-get autoremove -y"
+install_monitoring_tools() {
+    sudo apt install -y glances bpytop nload lm-sensors
+    log_success "Monitoring tools installed."
+}
 
-            sudo apt-get install -f -y # Install dependencies if any
-            # rm "$cloudflared_deb_path" # Let cleanup handle or successful exit skip cleanup
-            
-            if command -v cloudflared &> /dev/null; then
-                log_success "cloudflared $(cloudflared --version) installed."
-            else
-                log_error "cloudflared installation failed (command not found after dpkg)."
-                return 1 # Explicitly fail
-            fi
-        else
-            log_info "cloudflared already installed. Version: $(cloudflared --version)"
-        fi
+install_nginx() {
+    if command -v nginx &> /dev/null; then
+        log_info "Nginx already installed. Ensuring service is running."
+        sudo systemctl enable --now nginx
+        log_success "Nginx is ready."
+        return 0
     fi
+    sudo apt install -y nginx
+    sudo systemctl enable --now nginx
+    if [ "$SETUP_UFW" = true ] && sudo ufw status | grep -qw active; then
+        sudo ufw allow 'Nginx Full'
+    fi
+    log_success "Nginx installed and running."
+}
 
-    # --- Security Improvements ---
-    log_info "Installing and configuring additional security tools..."
-    log_info "Installing fail2ban for SSH protection..."
+install_cloudflared() {
+    ARCH=$(dpkg --print-architecture)
+    CLOUDFLARED_LATEST_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}.deb"
+    local cloudflared_deb_path="/tmp/cloudflared.deb"
+    wget -O "$cloudflared_deb_path" "${CLOUDFLARED_LATEST_URL}"
+    sudo dpkg -i "$cloudflared_deb_path"
+    sudo apt-get install -f -y
+    rm -f "$cloudflared_deb_path"
+    if command -v cloudflared &> /dev/null; then
+        log_success "cloudflared $(cloudflared --version) installed."
+    else
+        log_error "cloudflared installation failed."
+        return 1
+    fi
+}
+
+install_fail2ban() {
     sudo apt install -y fail2ban
     sudo systemctl enable --now fail2ban
-    add_cleanup_action_on_failure "log_warning 'Disabling and stopping fail2ban'; sudo systemctl disable --now fail2ban"
-    # We won't try to uninstall fail2ban package itself.
-
     JAIL_LOCAL_CONF="/etc/fail2ban/jail.local"
-    if [ ! -f "$JAIL_LOCAL_CONF" ] || ! grep -qE "^\s*\[sshd\]" "$JAIL_LOCAL_CONF"; then # Check for [sshd] at start of line
-        log_info "Creating/updating fail2ban jail.local configuration for SSH..."
-        backup_file "$JAIL_LOCAL_CONF" # Backup as root
-        
+    if [ ! -f "$JAIL_LOCAL_CONF" ] || ! grep -qE "^\s*\[sshd\]" "$JAIL_LOCAL_CONF"; then
+        backup_file "$JAIL_LOCAL_CONF"
         sudo bash -c "cat >> '$JAIL_LOCAL_CONF'" << EOF
 
 [sshd]
@@ -491,313 +614,262 @@ maxretry = 5
 bantime = 1h
 findtime = 10m
 EOF
-        # If cat fails, backup is restored. If succeeds, restore action is armed.
         sudo systemctl restart fail2ban
-        log_success "fail2ban configured to protect SSH via jail.local."
+        log_success "fail2ban configured for SSH protection."
     else
-        log_info "fail2ban sshd configuration seems to exist in $JAIL_LOCAL_CONF or is managed elsewhere. No changes made."
+        log_info "fail2ban SSH config already exists."
     fi
+}
 
-    # --- Set up development environments for additional user ---
-    if [ -n "$ADDITIONAL_USER" ] && id "$ADDITIONAL_USER" &>/dev/null; then
-        setup_user_environment "$ADDITIONAL_USER" # This function also uses add_cleanup_action_on_failure
-    else
-        log_info "Skipping environment setup for ADDITIONAL_USER (not defined or does not exist)."
-    fi
+install_unattended_upgrades() {
+    sudo apt install -y unattended-upgrades apt-listchanges
+    echo 'APT::Periodic::Update-Package-Lists "1";' | sudo tee /etc/apt/apt.conf.d/20auto-upgrades > /dev/null
+    echo 'APT::Periodic::Unattended-Upgrade "1";' | sudo tee -a /etc/apt/apt.conf.d/20auto-upgrades > /dev/null
+    log_success "Automatic security updates enabled."
+}
 
-    # --- Create System Logs Directory for current user ---
-    log_info "Creating system logs directory for current user ($USER)..."
+collect_system_logs() {
     LOGS_DIR="$HOME/system_logs"
     mkdir -p "$LOGS_DIR"
-    add_cleanup_action_on_failure "log_warning 'Removing system_logs directory for $USER'; rm -rf '$LOGS_DIR'"
-    # Subsequent file creations in LOGS_DIR don't need individual cleanup if the dir is removed.
     date > "$LOGS_DIR/setup_complete_date.log"
-    # ... other log files ...
-    log_success "System logs directory created at $LOGS_DIR for user $USER"
-
-    # If script reaches here, all main operations were successful
-    # This is the "commit point" for the main operations.
-    # Any errors after this point (in info display) should not trigger a full rollback.
+    uname -a > "$LOGS_DIR/system_info.log"
+    cat /proc/cpuinfo > "$LOGS_DIR/cpu_info.log" 2>/dev/null
+    free -h > "$LOGS_DIR/memory_info.log"
+    df -h > "$LOGS_DIR/disk_info.log"
+    ip addr > "$LOGS_DIR/network_info.log" 2>/dev/null
+    if command -v docker &> /dev/null; then
+        docker info > "$LOGS_DIR/docker_info.log" 2>/dev/null || true
+    fi
+    {
+        echo "NexusCore Setup - $(date)"
+        echo "User: $ADMIN_USER"
+        echo "Hostname: $(hostname)"
+        echo "Python: $INSTALL_PYTHON"
+        echo "Java: $INSTALL_JAVA"
+        echo "Go: $INSTALL_GO"
+        echo "Node.js: $INSTALL_NODEJS"
+        echo "C/C++: $INSTALL_CPP"
+        echo "Docker: $INSTALL_DOCKER"
+        echo "Miniconda: $INSTALL_MINICONDA"
+        echo "Nginx: $INSTALL_NGINX"
+        echo "Cloudflared: $INSTALL_CLOUDFLARED"
+        echo "Monitoring: $INSTALL_MONITORING_TOOLS"
+        echo "UFW: $SETUP_UFW"
+        echo "SSH Hardened: $CONFIGURE_SSH"
+        echo "Swap: $SETUP_SWAP ($SWAP_SIZE)"
+        echo "Auto-updates: $SETUP_UNATTENDED_UPGRADES"
+        echo ""
+        echo "Succeeded: ${SUCCEEDED_COMPONENTS[*]:-none}"
+        echo "Failed: ${FAILED_COMPONENTS[*]:-none}"
+        echo "Skipped: ${SKIPPED_COMPONENTS[*]:-none}"
+    } > "$LOGS_DIR/nexuscore_config.log"
+    log_success "System logs saved to $LOGS_DIR"
 }
 
+# ============================================================================
+# Main Operations — critical setup runs with set -e, optional components
+# are isolated so a failure in one doesn't stop the rest.
+# ============================================================================
+run_main_operations() {
+    print_banner
 
-# --- User Environment Setup Function (called for $USER and $ADDITIONAL_USER) ---
-setup_user_environment() {
-    local username="$1"
-    local user_home
-    user_home=$(eval echo "~$username") 
-    
-    if [ ! -d "$user_home" ]; then
-        log_warning "Home directory for user $username ($user_home) not found. Skipping environment setup."
-        return # Not a fatal error for the whole script usually
+    # --- Critical pre-flight checks (must succeed) ---
+    set -e
+    check_os_compatibility
+
+    log_info "Starting NexusCore Server Setup v3.2 for user: $ADMIN_USER"
+    if [ "$(id -u)" = "0" ]; then
+       log_error "This script should not be run as root. Run as a sudo-enabled user."
+       exit 1
     fi
 
-    log_info "Setting up development environment for user: $username"
-    
-    # NVM setup
+    if ! sudo -n true 2>/dev/null; then
+        log_warning "Sudo access for $USER requires a password. You may be prompted multiple times."
+    fi
+
+    # Interactive component selection
+    interactive_setup
+
+    # --- Critical: System update & upgrade (must succeed) ---
+    log_info "Updating package lists and upgrading existing packages..."
+    log_info "(If another process is using apt, we will retry automatically.)"
+    apt_retry update
+    apt_retry -y upgrade
+    log_success "System updated and upgraded."
+
+    # --- Critical: Base packages (must succeed) ---
+    log_info "Installing essential packages, development tools, and server utilities..."
+    apt_retry -y install \
+        git curl wget build-essential software-properties-common apt-transport-https \
+        ca-certificates gnupg lsb-release unzip zip make cmake pkg-config autoconf automake \
+        libtool gettext tree htop btop iotop iftop ncdu gnupg2 pass neofetch \
+        tmux screen vim nano jq net-tools dnsutils rsync socat mtr-tiny nload \
+        sysstat logrotate cron
+    log_success "Essential packages installed."
+    set +e  # Disable exit-on-error — from here, optional components are isolated
+
+    # --- Optional components (each isolated — failure in one doesn't stop others) ---
+
+    # Server configuration
+    if [ "$SETUP_HOSTNAME" = true ]; then
+        run_component "Hostname" install_hostname
+    fi
+
+    if [ "$SETUP_TIMEZONE" = true ]; then
+        run_component "Timezone" install_timezone
+    fi
+
+    if [ "$SETUP_SWAP" = true ]; then
+        if [ -f /swapfile ]; then
+            log_info "Swap file already exists. Skipping."
+            SKIPPED_COMPONENTS+=("Swap File (already exists)")
+        else
+            run_component "Swap File" install_swap
+        fi
+    fi
+
+    if [ "$CONFIGURE_SSH" = true ]; then
+        run_component "SSH Hardening" install_ssh_hardening
+    fi
+
+    if [ "$SETUP_UFW" = true ]; then
+        run_component "UFW Firewall" install_ufw
+    fi
+
+    # Security (always run, but non-fatal)
+    run_component "Fail2ban" install_fail2ban
+
+    # Development tools
+    if [ "$INSTALL_PYTHON" = true ]; then
+        run_component "Python 3" install_python
+    fi
+
+    if [ "$INSTALL_JAVA" = true ]; then
+        run_component "Java (OpenJDK $JAVA_VERSION)" install_java
+    fi
+
+    if [ "$INSTALL_CPP" = true ]; then
+        run_component "C/C++ Toolchain" install_cpp
+    fi
+
+    if [ "$INSTALL_GO" = true ]; then
+        if command -v go &> /dev/null; then
+            log_info "Go already installed: $(go version). Skipping."
+            SKIPPED_COMPONENTS+=("Go (already installed)")
+        else
+            run_component "Go $GO_VERSION" install_go
+        fi
+    fi
+
     if [ "$INSTALL_NODEJS" = true ]; then
-        log_info "Setting up NVM for user $username..."
-        # Backup .bashrc and .zshrc before NVM script modifies them
-        backup_file "$user_home/.bashrc" "$username"
-        if sudo -u "$username" [ -f "$user_home/.zshrc" ]; then
-            backup_file "$user_home/.zshrc" "$username"
-        fi
+        run_component "Node.js (NVM)" install_nodejs
+    fi
 
-        # NVM installation itself creates $NVM_DIR and modifies rc files.
-        # The rc file changes are handled by backup/restore.
-        # We need to add cleanup for the $NVM_DIR.
-        sudo -u "$username" bash -e -u -o pipefail << EOF
-export NVM_DIR="\$HOME/.nvm"
-if [ ! -d "\$NVM_DIR" ]; then
-    mkdir -p "\$NVM_DIR" # NVM installer expects this
-    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
-    # Source NVM for this subshell to install Node
-    [ -s "\$NVM_DIR/nvm.sh" ] && \. "\$NVM_DIR/nvm.sh"
-    [ -s "\$NVM_DIR/bash_completion" ] && \. "\$NVM_DIR/bash_completion"
-    if command -v nvm &> /dev/null; then
-        set +u 
-        nvm install --lts && nvm use --lts && nvm alias default 'lts/*'
-        set -u
-    else
-        echo "[ERROR_NVM_SUB] NVM command not found after install for $username" >&2
-        exit 1 # Fail the subshell
+    if [ "$INSTALL_DOCKER" = true ]; then
+        run_component "Docker" install_docker
     fi
-else
-    # NVM already exists, source and ensure LTS
-    [ -s "\$NVM_DIR/nvm.sh" ] && \. "\$NVM_DIR/nvm.sh"
-    set +u
-    if ! nvm ls 'lts/*' &> /dev/null || ! (nvm current | grep -qE 'lts|node'); then
-        nvm install --lts && nvm use --lts && nvm alias default 'lts/*'
-    elif ! (nvm current | grep -q 'lts'); then
-        nvm use 'lts/*' && nvm alias default 'lts/*'
-    fi
-    set -u
-fi
-EOF
-        # Check if NVM directory was created (proxy for success of the subshell part)
-        if sudo -u "$username" test -d "$user_home/.nvm"; then
-            add_cleanup_action_on_failure "log_warning 'Removing NVM directory for $username'; sudo -u '$username' rm -rf '$user_home/.nvm'"
-            log_success "NVM appears configured for $username. Shell rc files were backed up."
-        else
-            log_error "NVM setup for $username may have failed (NVM_DIR not found or subshell error)."
-            # If subshell exited with 1, set -e in parent would catch it.
-            # If subshell had echo "[ERROR_NVM_SUB]" but didn't exit 1, parent won't know unless we check output.
-            # Assuming the subshell's set -e handles its failure.
-        fi
-    fi
-    
-    # Miniconda setup
+
     if [ "$INSTALL_MINICONDA" = true ]; then
-        log_info "Setting up Miniconda for user $username..."
-        backup_file "$user_home/.bashrc" "$username"
-        if sudo -u "$username" [ -f "$user_home/.zshrc" ]; then
-            backup_file "$user_home/.zshrc" "$username"
-        fi
-        
-        sudo -u "$username" bash -e -u -o pipefail << EOF
-CONDA_DIR="\$HOME/miniconda3"
-if [ ! -d "\$CONDA_DIR/bin" ]; then
-    MINICONDA_TMP_DIR="\$HOME/miniconda_tmp_user_$username" # Unique temp dir name
-    mkdir -p "\$MINICONDA_TMP_DIR"
-    wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O "\$MINICONDA_TMP_DIR/miniconda_installer.sh"
-    bash "\$MINICONDA_TMP_DIR/miniconda_installer.sh" -b -u -p "\$CONDA_DIR"
-    rm -rf "\$MINICONDA_TMP_DIR"
-
-    eval "\$("\$CONDA_DIR/bin/conda" 'shell.bash' 'hook')"
-    "\$CONDA_DIR/bin/conda" init bash
-    if [ -f "\$HOME/.zshrc" ]; then
-        "\$CONDA_DIR/bin/conda" init zsh
+        run_component "Miniconda" install_miniconda
     fi
-else
-    eval "\$("\$CONDA_DIR/bin/conda" 'shell.bash' 'hook')"
-fi
-PATH="\$CONDA_DIR/bin:\$PATH" # Ensure conda is available for config
-if command -v conda &> /dev/null; then
-    conda config --set auto_activate_base false
-else
-    echo "[ERROR_CONDA_SUB] Conda command not found after install for $username" >&2
-    exit 1 # Fail the subshell
-fi
-EOF
-        if sudo -u "$username" test -d "$user_home/miniconda3"; then
-            add_cleanup_action_on_failure "log_warning 'Removing Miniconda directory for $username'; sudo -u '$username' rm -rf '$user_home/miniconda3'"
-            # The temp dir MINICONDA_TMP_DIR is cleaned by the subshell. If subshell fails before rm, it's orphaned.
-            # This is harder to clean from parent unless we make its path predictable and add cleanup from parent.
-            # For now, accept small risk of orphaned temp dir on subshell failure.
-            log_success "Miniconda appears configured for $username. Shell rc files were backed up."
+
+    # Server software
+    if [ "$INSTALL_NGINX" = true ]; then
+        run_component "Nginx" install_nginx
+    fi
+
+    if [ "$INSTALL_CLOUDFLARED" = true ]; then
+        if command -v cloudflared &> /dev/null; then
+            log_info "cloudflared already installed: $(cloudflared --version). Skipping."
+            SKIPPED_COMPONENTS+=("Cloudflared (already installed)")
         else
-            log_error "Miniconda setup for $username may have failed (CONDA_DIR not found or subshell error)."
+            run_component "Cloudflared" install_cloudflared
         fi
     fi
-    
-    # Create system logs directory for the user
-    sudo -u "$username" mkdir -p "$user_home/system_logs"
-    add_cleanup_action_on_failure "log_warning 'Removing system_logs for $username'; sudo -u '$username' rm -rf '$user_home/system_logs'"
-    
-    log_success "Development environment set up for user: $username"
-}
 
-# --- Restricted Sudo User Creation ---
-create_restricted_sudo_user() {
-    local username="$1"
-    local user_created_by_this_script=false
-    local sudoers_file_path="/etc/sudoers.d/${username}_restricted"
-    
-    log_info "Creating user '$username' with restricted sudo privileges..."
-    
-    if ! id "$username" &>/dev/null; then
-        sudo adduser --disabled-password --gecos "" "$username"
-        # Check if adduser succeeded
-        if ! id "$username" &>/dev/null; then
-            log_error "Failed to create user $username"
-            return 1 # Triggers ERR trap
-        fi
-        user_created_by_this_script=true
-        # Only add userdel to cleanup if this script created the user
-        add_cleanup_action_on_failure "log_warning 'Removing user $username (created by this script run)'; sudo userdel --remove '$username'"
-        log_info "User '$username' created."
-        
-        echo "Please set a password for user '$username':"
-        sudo passwd "$username"
-        sudo chage -d 0 "$username" # Force password change on first login
-    else
-        log_info "User '$username' already exists."
-    fi
-    
-    sudo usermod -aG sudo "$username" # Add to sudo group
-    # Undoing usermod -aG is complex (gpasswd -d user group), usually not done in basic cleanup.
-
-    if [ "$INSTALL_DOCKER" = true ] && getent group docker > /dev/null; then
-        sudo usermod -aG docker "$username"
-    fi
-    
-    # Create the sudoers restriction file
-    backup_file "$sudoers_file_path" # Backup if it exists, though usually it won't
-    sudo tee "$sudoers_file_path" > /dev/null << EOF
-Cmnd_Alias USERMOD_CMDS = /usr/sbin/adduser, /usr/sbin/useradd, /usr/sbin/userdel, /usr/sbin/usermod, /usr/sbin/deluser
-Cmnd_Alias USER_PASSWD_CMDS = /usr/bin/passwd [A-Za-z0-9_]*, !/usr/bin/passwd $username, /usr/sbin/chpasswd, /usr/sbin/newusers
-$username ALL=(ALL:ALL) ALL, !USERMOD_CMDS, !USER_PASSWD_CMDS
-EOF
-    if [ ! -f "$sudoers_file_path" ]; then # Check if tee command succeeded
-        log_error "Failed to create sudoers file $sudoers_file_path"
-        return 1
-    fi
-    # The backup_file function already added a restore for this. If the file didn't exist,
-    # backup_file does nothing, so we need a specific rm for the newly created file.
-    # To simplify: if backup_file's restore runs, it tries to mv a non-existent backup if file was new.
-    # Let's add a direct rm and rely on LIFO. If backup existed and was restored, this rm fails harmlessly.
-    # If file was new, this rm cleans it.
-    add_cleanup_action_on_failure "log_warning 'Removing sudoers file $sudoers_file_path'; sudo rm -f '$sudoers_file_path'"
-
-    sudo chmod 440 "$sudoers_file_path"
-    
-    if sudo visudo -c -f "$sudoers_file_path"; then # Check specific file
-        log_success "Sudoers file syntax is valid for ${username}_restricted."
-    else
-        log_error "Sudoers file syntax error for ${username}_restricted. This will cause script failure and cleanup."
-        # The 'rm' action for sudoers_file_path is already registered.
-        # set -e will ensure visudo failure (exit code 1) halts the script.
-        return 1 
-    fi
-    
-    log_success "User '$username' configured with restricted sudo privileges."
-}
-
-
-# --- AMD GPU Driver Installation ---
-install_amd_gpu_drivers() {
-    log_info "Starting AMD GPU Driver (ROCm) installation..."
-    # This function is complex. Full cleanup of a failed driver install is beyond simple scripting.
-    # We will focus on cleaning up downloaded files.
-
-    if [[ -f /etc/os-release ]]; then
-        . /etc/os-release
-        if [[ "$VERSION_CODENAME" != "noble" ]]; then
-            log_error "AMD GPU ROCm installation is for Ubuntu 24.04 (noble). Detected: $VERSION_CODENAME. Skipping."
-            return 1 # Signal error to halt if this is critical path
-        fi
-    else
-        log_error "Cannot determine OS version. Skipping AMD GPU ROCm installation."
-        return 1
+    if [ "$INSTALL_MONITORING_TOOLS" = true ]; then
+        run_component "Monitoring Tools" install_monitoring_tools
     fi
 
-    log_info "Installing prerequisites for AMD GPU drivers..."
-    sudo apt update
-    sudo apt install -y python3-setuptools python3-wheel # If these fail, script halts.
-    log_success "Prerequisites installed."
+    if [ "$SETUP_UNATTENDED_UPGRADES" = true ]; then
+        run_component "Unattended Upgrades" install_unattended_upgrades
+    fi
 
-    local amd_installer_tmp_path="/tmp/${AMD_GPU_INSTALLER_FILENAME}"
-    log_info "Downloading AMD GPU installer: ${AMD_GPU_INSTALLER_FILENAME}..."
-    wget --progress=bar:force -O "$amd_installer_tmp_path" "${AMD_GPU_INSTALLER_FULL_URL}"
-    # If wget fails, set -e halts. Add cleanup for the potentially partial download.
-    add_cleanup_action_on_failure "log_warning 'Removing AMD GPU installer download'; rm -f '$amd_installer_tmp_path'"
-    log_success "AMD GPU installer downloaded."
-
-    log_info "Installing AMD GPU installer script package..."
-    # This installs the 'amdgpu-install' package.
-    sudo apt install -y "$amd_installer_tmp_path" 
-    # If this install fails, script halts. Cleanup for downloaded .deb runs.
-    # If it succeeds, we could add a cleanup to 'apt remove amdgpu-install', but that's getting into
-    # package management rollback which we're trying to avoid for complexity.
-    # For now, we'll assume if this step succeeds, the 'amdgpu-install' package is there.
-    # The downloaded .deb itself can be cleaned.
-    # rm "$amd_installer_tmp_path" # Let this be handled by cleanup action or successful script completion.
-
-    log_info "Running amdgpu-install for workstation drivers and ROCm..."
-    log_warning "This step can take a significant amount of time."
-    sudo apt update 
-    sudo amdgpu-install -y --usecase=workstation,rocm
-    # If amdgpu-install fails, it can leave the system in a complex state.
-    # A simple 'apt remove' might not be sufficient or correct.
-    # The script will halt here. User intervention might be needed for deeper cleanup of ROCm.
-    log_success "amdgpu-install process completed."
-
-    log_info "Adding users to 'render' and 'video' groups..."
-    # Adding users to groups is generally safe and low-risk to leave even if script fails later.
-    # Reversing 'usermod -aG' is 'gpasswd -d user group', but usually not done.
-    for user_to_add_gpu_groups in "$ADMIN_USER" "$ADDITIONAL_USER" "$USER"; do # Include current user
-        if id "$user_to_add_gpu_groups" &>/dev/null; then
-            sudo usermod -aG render "$user_to_add_gpu_groups"
-            sudo usermod -aG video "$user_to_add_gpu_groups"
-            log_info "User $user_to_add_gpu_groups added to 'render' and 'video' groups."
-        fi
-    done
-    log_success "Users configured for GPU groups."
-    log_warning "A SYSTEM REBOOT IS REQUIRED for AMD GPU drivers."
-    log_success "AMD GPU Driver (ROCm) installation script part finished."
+    # System logs (always, non-fatal)
+    run_component "System Logs" collect_system_logs
 }
 
 
 # --- Main Script Execution Control ---
 main_entry_point() {
-    # All primary setup operations are in run_main_operations()
-    # which runs with `set -e`. If it fails, ERR trap is triggered.
+    # run_main_operations handles critical setup with set -e, and optional components
+    # with run_component (isolated, non-fatal). It only fails if critical setup fails.
     if run_main_operations; then
-        SCRIPT_SUCCESSFUL=true # Mark success to prevent cleanup_on_error from running
-        log_success "All NexusCore setup operations completed successfully!"
+        SCRIPT_SUCCESSFUL=true
         
-        # Now, display final information. Errors here should not roll back the setup.
-        set +e # Disable exit on error for purely informational commands
+        set +e # Disable exit on error for informational display
         
+        # --- Component Summary ---
+        echo
+        log_info "==================== SETUP SUMMARY ===================="
+        if [ ${#SUCCEEDED_COMPONENTS[@]} -gt 0 ]; then
+            echo -e "\033[1;32m  ✓ Succeeded (${#SUCCEEDED_COMPONENTS[@]}):\033[0m"
+            for c in "${SUCCEEDED_COMPONENTS[@]}"; do
+                echo -e "    \033[1;32m✓\033[0m $c"
+            done
+        fi
+        if [ ${#SKIPPED_COMPONENTS[@]} -gt 0 ]; then
+            echo -e "\033[1;33m  → Skipped (${#SKIPPED_COMPONENTS[@]}):\033[0m"
+            for c in "${SKIPPED_COMPONENTS[@]}"; do
+                echo -e "    \033[1;33m→\033[0m $c"
+            done
+        fi
+        if [ ${#FAILED_COMPONENTS[@]} -gt 0 ]; then
+            echo -e "\033[1;31m  ✗ Failed (${#FAILED_COMPONENTS[@]}):\033[0m"
+            for c in "${FAILED_COMPONENTS[@]}"; do
+                echo -e "    \033[1;31m✗\033[0m $c"
+            done
+            echo
+            log_warning "Some components failed. You can re-run the script — it will skip what's already installed and retry the rest."
+        fi
+        echo
+
         log_info "-------------------- SYSTEM INFORMATION --------------------"
-        # ... (all the neofetch, df, ip addr, etc. calls) ...
         echo -e "\033[1;32mHostname:\033[0m $(hostname)"
         SERVER_IPS=$(hostname -I)
         echo -e "\033[1;32mServer IP Addresses:\033[0m $SERVER_IPS"
-        # (Continue with all informational outputs from the original script)
-        if command -v neofetch &> /dev/null; then neofetch; else lsb_release -a; uname -a; fi
-        # ... and so on for all final logs ...
+        echo -e "\033[1;32mTimezone:\033[0m $(cat /etc/timezone 2>/dev/null || timedatectl show --property=Timezone --value 2>/dev/null || echo 'N/A')"
+        if [ -f /swapfile ]; then
+            echo -e "\033[1;32mSwap:\033[0m $(swapon --show=SIZE --noheadings 2>/dev/null || echo 'active')"
+        fi
+        echo
+        if command -v neofetch &> /dev/null; then neofetch; else lsb_release -a 2>/dev/null; uname -a; fi
 
         log_info "-------------------- IMPORTANT NEXT STEPS --------------------"
-        # ... (all next steps messages) ...
+        local step=1
+        echo -e "\033[1;33m${step}. Reload your shell:\033[0m source ~/.bashrc"; ((step++))
+        if [ "$INSTALL_DOCKER" = true ]; then
+            echo -e "\033[1;33m${step}. Apply Docker group:\033[0m newgrp docker  (or log out and back in)"; ((step++))
+        fi
+        if [ "$CONFIGURE_SSH" = true ] && [ "$ENABLE_PASSWORD_AUTH" = false ]; then
+            echo -e "   \033[1;31m⚠ Password auth is DISABLED. Ensure you have SSH key access before disconnecting!\033[0m"
+            echo -e "\033[1;33m${step}. Setup SSH keys (from your local machine):\033[0m ssh-copy-id ${ADMIN_USER}@$(hostname -I | awk '{print $1}')"; ((step++))
+        fi
+        if [ "$INSTALL_NGINX" = true ]; then
+            echo -e "\033[1;33m${step}. Nginx is running:\033[0m http://$(hostname -I | awk '{print $1}')"; ((step++))
+        fi
+        echo -e "\033[1;33m${step}. View system logs:\033[0m ls ~/system_logs/"; ((step++))
 
         echo
-        log_info "NexusCore Setup Process Completed for user $USER. Primary admin user is '$ADMIN_USER'."
-        # ... (final user status message) ...
+        if [ ${#FAILED_COMPONENTS[@]} -gt 0 ]; then
+            log_warning "NexusCore Setup completed with ${#FAILED_COMPONENTS[@]} failed component(s). Review above."
+        else
+            log_success "NexusCore Setup completed successfully for user $USER!"
+        fi
 
         REBOOT_PROMPT_MESSAGE="Reboot now to apply all changes? (y/N): "
-        if [ "$INSTALL_AMD_GPU_DRIVERS" = true ] || [ "$INSTALL_DOCKER" = true ]; then
-            REBOOT_PROMPT_MESSAGE="Reboot now to apply all changes (RECOMMENDED for Docker group changes and/or AMD GPU drivers)? (y/N): "
+        if [ "$INSTALL_DOCKER" = true ]; then
+            REBOOT_PROMPT_MESSAGE="Reboot now to apply all changes (RECOMMENDED for Docker group changes)? (y/N): "
         fi
         read -p "$REBOOT_PROMPT_MESSAGE" -r
         if [[ $REPLY =~ ^[Yy]$ ]]; then
@@ -805,13 +877,12 @@ main_entry_point() {
             sudo reboot
         fi
     else
-        # run_main_operations failed. ERR trap should have already run cleanup_on_error.
-        # SCRIPT_SUCCESSFUL is still false.
-        log_error "NexusCore Advanced Setup script FAILED. Please check logs above for details on errors and cleanup attempts."
-        exit 1 # Ensure script exits with an error code
+        # Critical setup failed (update/upgrade or base packages). Can't continue.
+        log_error "NexusCore critical setup FAILED (system update or base packages)."
+        log_error "Please check logs above. Fix the issue and re-run the script."
+        exit 1
     fi
 }
 
 # --- Script Start ---
-# Call the main entry point that controls operations and error handling.
 main_entry_point "$@"

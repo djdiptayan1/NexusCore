@@ -245,7 +245,7 @@ restart_service_enhanced() {
 clear
 print_header "NEXUS CORE v2.0 - ADVANCED SERVICE ORCHESTRATOR"
 echo -e "${NEON_GREEN}${BOLD}► Quantum-encrypted connection established${RESET}"
-echo -e "${CYAN}► Operator authenticated: ${YELLOW}${BOLD}djdiptayan${RESET}"
+echo -e "${CYAN}► Operator authenticated: ${YELLOW}${BOLD}$(whoami)${RESET}"
 echo -e "${CYAN}► Security clearance: ${GREEN}${BOLD}OMEGA LEVEL${RESET}"
 echo -e "${GRAY}► Timestamp: $(date '+%Y-%m-%d %H:%M:%S %Z')${RESET}\n"
 
@@ -258,7 +258,7 @@ UPTIME_INFO=$(uptime -p)
 IP_ADDRESS_INFO=$(ip route get 1.1.1.1 | awk '{print $7; exit}' 2>/dev/null || echo "N/A")
 
 echo -e "${CYAN}┌─ System Identity ─────────────────────────────────────────┐${RESET}"
-echo -e "${CYAN}│${RESET} Codename        : ${YELLOW}${BOLD}DJSERVER${RESET}$(printf "%*s" 27 "")${CYAN}│${RESET}"
+echo -e "${CYAN}│${RESET} Codename        : ${YELLOW}${BOLD}NEXUSCORE${RESET}$(printf "%*s" 26 "")${CYAN}│${RESET}"
 echo -e "${CYAN}│${RESET} Hostname        : ${WHITE}$HOSTNAME_INFO${RESET}$(printf "%*s" $((40-${#HOSTNAME_INFO})) "")${CYAN}│${RESET}"
 echo -e "${CYAN}│${RESET} OS              : ${WHITE}$OS_INFO${RESET}$(printf "%*s" $((40-${#OS_INFO})) "")${CYAN}│${RESET}"
 echo -e "${CYAN}│${RESET} Kernel          : ${WHITE}$KERNEL_INFO${RESET}$(printf "%*s" $((40-${#KERNEL_INFO})) "")${CYAN}│${RESET}"
@@ -382,6 +382,6 @@ echo -e "${CYAN}└────────────────────�
 
 echo
 print_header "NEXUS CORE v2.0: ALL QUANTUM SYSTEMS OPERATIONAL"
-echo -e "${NEON_GREEN}${BOLD}🚀 WELCOME BACK TO THE MATRIX, DJDIPTAYAN${RESET}"
+echo -e "${NEON_GREEN}${BOLD}🚀 WELCOME BACK TO THE MATRIX, $(whoami | tr '[:lower:]' '[:upper:]')${RESET}"
 echo -e "${CYAN}${BOLD}► Ready to execute your commands, Boss.${RESET}"
 echo
