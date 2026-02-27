@@ -2,7 +2,7 @@
 
 [![Ubuntu Version](https://img.shields.io/badge/Ubuntu-24.04.2_LTS-orange.svg)](https://ubuntu.com/)
 [![Bash Script](https://img.shields.io/badge/Bash-Script-brightgreen.svg)](https://www.gnu.org/software/bash/)
-[![Version](https://img.shields.io/badge/Version-3.1-blue.svg)](https://github.com/djdiptayan1/NexusCore)
+[![Version](https://img.shields.io/badge/Version-3.2-blue.svg)](https://github.com/djdiptayan1/NexusCore)
 
 </div>
 <!-- # NexusCore - Ubuntu Server Setup Toolkit -->
@@ -30,6 +30,13 @@ NexusCore is a complete server setup script for Ubuntu 24.04 LTS. It uses intera
 - ✅ Single-user focused setup (uses current user)
 - ✅ Organized prompts in categories: Server Config, Development Tools, Server Software
 - ✅ Summary confirmation before proceeding
+
+### Resilient Execution
+- ✅ **Isolated components** — failure in one component doesn't stop the rest
+- ✅ **Already-installed detection** — skips Go, Docker, Cloudflared, swap, etc. if already present
+- ✅ **apt retry logic** — automatically retries if apt is locked by another process
+- ✅ **Setup summary** — shows succeeded ✓, skipped →, and failed ✗ components at the end
+- ✅ **Re-runnable** — safe to run again; it picks up where it left off
 
 ### Server Configuration
 - ✅ Custom hostname configuration
