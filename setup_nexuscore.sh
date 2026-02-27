@@ -347,9 +347,9 @@ run_main_operations() {
         old_hostname=$(hostname)
         sudo hostnamectl set-hostname "$NEW_HOSTNAME"
         # Update /etc/hosts if the old hostname is referenced
-        if grep -q "$old_hostname" /etc/hosts; then
+        if grep -qw "$old_hostname" /etc/hosts; then
             backup_file "/etc/hosts"
-            sudo sed -i "s/$old_hostname/$NEW_HOSTNAME/g" /etc/hosts
+            sudo sed -i "s/\b${old_hostname}\b/$NEW_HOSTNAME/g" /etc/hosts
         fi
         add_cleanup_action_on_failure "log_warning 'Restoring hostname to $old_hostname'; sudo hostnamectl set-hostname '$old_hostname'"
         log_success "Hostname set to $NEW_HOSTNAME."
@@ -357,7 +357,7 @@ run_main_operations() {
 
     # --- Timezone Configuration ---
     if [ "$SETUP_TIMEZONE" = true ]; then
-        log_info "Configuring timezone..."
+        log_info "Configuring timezone (you will be prompted to select your timezone)..."
         sudo dpkg-reconfigure tzdata
         log_success "Timezone configured to $(cat /etc/timezone 2>/dev/null || timedatectl show --property=Timezone --value)."
     fi
@@ -655,8 +655,8 @@ run_main_operations() {
         sudo apt install -y nginx
         sudo systemctl enable --now nginx
         add_cleanup_action_on_failure "log_warning 'Disabling and stopping Nginx'; sudo systemctl disable --now nginx"
-        # If UFW is enabled, ensure Nginx profile is allowed
-        if [ "$SETUP_UFW" = true ]; then
+        # If UFW is active, ensure Nginx profile is allowed
+        if [ "$SETUP_UFW" = true ] && sudo ufw status | grep -qw active; then
             sudo ufw allow 'Nginx Full'
         fi
         log_success "Nginx installed and running."
@@ -725,7 +725,9 @@ EOF
     if [ "$SETUP_UNATTENDED_UPGRADES" = true ]; then
         log_info "Configuring automatic security updates (unattended-upgrades)..."
         sudo apt install -y unattended-upgrades apt-listchanges
-        sudo dpkg-reconfigure -plow unattended-upgrades
+        # Configure non-interactively
+        echo 'APT::Periodic::Update-Package-Lists "1";' | sudo tee /etc/apt/apt.conf.d/20auto-upgrades > /dev/null
+        echo 'APT::Periodic::Unattended-Upgrade "1";' | sudo tee -a /etc/apt/apt.conf.d/20auto-upgrades > /dev/null
         log_success "Automatic security updates enabled."
     fi
 
@@ -800,8 +802,8 @@ main_entry_point() {
             echo -e "\033[1;33m${step}. Apply Docker group:\033[0m newgrp docker  (or log out and back in)"; ((step++))
         fi
         if [ "$CONFIGURE_SSH" = true ] && [ "$ENABLE_PASSWORD_AUTH" = false ]; then
-            echo -e "\033[1;33m${step}. Setup SSH keys:\033[0m ssh-copy-id $USER@$(hostname -I | awk '{print $1}')"; ((step++))
             echo -e "   \033[1;31m⚠ Password auth is DISABLED. Ensure you have SSH key access before disconnecting!\033[0m"
+            echo -e "\033[1;33m${step}. Setup SSH keys (from your local machine):\033[0m ssh-copy-id your-user@$(hostname -I | awk '{print $1}')"; ((step++))
         fi
         if [ "$INSTALL_NGINX" = true ]; then
             echo -e "\033[1;33m${step}. Nginx is running:\033[0m http://$(hostname -I | awk '{print $1}')"; ((step++))
