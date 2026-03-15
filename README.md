@@ -56,7 +56,7 @@ NexusCore is a complete server setup script for multiple Linux distributions. It
 ### Development Environment
 - ✅ Multiple programming languages and runtimes:
   - Python 3 with pip, venv, and dev headers
-  - OpenJDK 17 (JDK & JRE)
+  - OpenJDK (latest LTS — auto-detected)
   - Go (Golang)
   - C/C++ toolchain (gcc, g++, gdb, clang)
   - Node.js LTS via NVM (Node Version Manager)
@@ -126,8 +126,8 @@ NexusCore is a complete server setup script for multiple Linux distributions. It
 | | UFW | Firewall with SSH, HTTP, HTTPS rules (UFW on Debian-based, Firewalld on Fedora) |
 | | Auto-updates | unattended-upgrades (Debian-based) / dnf-automatic (Fedora) |
 | **Dev** | Python | Python 3, pip, venv, dev headers |
-| | Java | OpenJDK 17 (JDK & JRE) |
-| | Go | Go 1.23.6 |
+| | Java | OpenJDK (latest LTS — auto-detected from package manager) |
+| | Go | Latest stable (auto-detected from go.dev) |
 | | Node.js | NVM + LTS Node.js + yarn, typescript, nodemon, pm2 |
 | | C/C++ | gcc, g++, gdb, clang, valgrind |
 | | Docker | Docker Engine + Docker Compose plugin |

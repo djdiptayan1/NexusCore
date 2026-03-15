@@ -8,8 +8,9 @@ set -uo pipefail
 
 # --- Configuration (defaults, overridden by interactive prompts) ---
 ADMIN_USER="$USER"
-JAVA_VERSION="17"
-GO_VERSION="1.23.6"
+JAVA_VERSION=""   # Auto-detected: latest LTS from package manager
+GO_VERSION=""     # Auto-detected: latest stable from go.dev
+NVM_VERSION=""    # Auto-detected: latest release from GitHub
 INSTALL_DOCKER=false
 INSTALL_PYTHON=false
 INSTALL_MINICONDA=false
@@ -218,6 +219,81 @@ install_base_packages() {
     fi
 }
 
+# --- Version Detection (auto-detect latest LTS/stable versions) ---
+
+# Detect latest available Java LTS version from the package manager
+# Java LTS versions: 8, 11, 17, 21, 25, ...
+detect_java_lts_version() {
+    local lts_versions=("25" "21" "17" "11" "8")
+    if [[ "$DISTRO_FAMILY" == "debian" ]]; then
+        for v in "${lts_versions[@]}"; do
+            if apt-cache show "openjdk-${v}-jdk" &>/dev/null; then
+                echo "$v"
+                return 0
+            fi
+        done
+    elif [[ "$DISTRO_FAMILY" == "fedora" ]]; then
+        for v in "${lts_versions[@]}"; do
+            if dnf list available "java-${v}-openjdk" &>/dev/null 2>&1; then
+                echo "$v"
+                return 0
+            fi
+        done
+    fi
+    echo "21"  # Fallback to latest known LTS
+}
+
+# Detect latest stable Go version from go.dev
+detect_go_version() {
+    local version
+    # Try fetching from the official Go download API
+    version=$(curl -fsSL --connect-timeout 5 'https://go.dev/dl/?mode=json' 2>/dev/null \
+        | grep -oP '"version":\s*"go\K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    if [ -n "$version" ]; then
+        echo "$version"
+        return 0
+    fi
+    # Fallback: parse the Go downloads page
+    version=$(curl -fsSL --connect-timeout 5 'https://go.dev/VERSION?m=text' 2>/dev/null \
+        | head -1 | sed 's/^go//')
+    if [ -n "$version" ]; then
+        echo "$version"
+        return 0
+    fi
+    echo "1.24.1"  # Fallback to a known stable version
+}
+
+# Detect latest NVM version from GitHub
+detect_nvm_version() {
+    local version
+    version=$(curl -fsSL --connect-timeout 5 'https://api.github.com/repos/nvm-sh/nvm/releases/latest' 2>/dev/null \
+        | grep -oP '"tag_name":\s*"\K[^"]+')
+    if [ -n "$version" ]; then
+        echo "$version"
+        return 0
+    fi
+    echo "v0.40.1"  # Fallback to a known stable version
+}
+
+# Resolve all auto-detected versions (called after package lists are updated)
+resolve_tool_versions() {
+    if [ -z "$JAVA_VERSION" ] && [ "$INSTALL_JAVA" = true ]; then
+        log_info "Detecting latest Java LTS version..."
+        JAVA_VERSION=$(detect_java_lts_version)
+        log_info "Java LTS version resolved: $JAVA_VERSION"
+    fi
+    if [ -z "$GO_VERSION" ] && [ "$INSTALL_GO" = true ]; then
+        log_info "Detecting latest Go stable version..."
+        GO_VERSION=$(detect_go_version)
+        log_info "Go version resolved: $GO_VERSION"
+    fi
+    if [ -z "$NVM_VERSION" ] && [ "$INSTALL_NODEJS" = true ]; then
+        log_info "Detecting latest NVM version..."
+        NVM_VERSION=$(detect_nvm_version)
+        log_info "NVM version resolved: $NVM_VERSION"
+    fi
+}
+
 # --- Helper Functions ---
 log_info() {
     echo -e "\n\033[1;34m[INFO]\033[0m $1"
@@ -318,11 +394,11 @@ interactive_setup() {
         INSTALL_PYTHON=true
     fi
 
-    if ask_yes_no "  Install Java (OpenJDK $JAVA_VERSION)?"; then
+    if ask_yes_no "  Install Java (OpenJDK, latest LTS)?"; then
         INSTALL_JAVA=true
     fi
 
-    if ask_yes_no "  Install Go ($GO_VERSION)?"; then
+    if ask_yes_no "  Install Go (latest stable)?"; then
         INSTALL_GO=true
     fi
 
@@ -370,9 +446,9 @@ interactive_setup() {
     echo -e "  Auto-updates:      $SETUP_UNATTENDED_UPGRADES"
     echo -e "  \033[1;36m[Development]\033[0m"
     echo -e "  Python:            $INSTALL_PYTHON"
-    echo -e "  Java:              $INSTALL_JAVA"
-    echo -e "  Go:                $INSTALL_GO"
-    echo -e "  Node.js:           $INSTALL_NODEJS"
+    echo -e "  Java:              $INSTALL_JAVA (latest LTS — auto-detected after update)"
+    echo -e "  Go:                $INSTALL_GO (latest stable — auto-detected)"
+    echo -e "  Node.js:           $INSTALL_NODEJS (latest LTS via NVM)"
     echo -e "  C/C++:             $INSTALL_CPP"
     echo -e "  Docker:            $INSTALL_DOCKER"
     echo -e "  Miniconda:         $INSTALL_MINICONDA"
@@ -606,7 +682,7 @@ install_nodejs() {
     fi
     if [ ! -d "$NVM_DIR" ]; then
         mkdir -p "$NVM_DIR"
-        curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+        curl -o- "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh" | bash
         [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
         [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
         if command -v nvm &> /dev/null; then
@@ -706,7 +782,9 @@ install_miniconda() {
     if [ ! -d "$CONDA_DIR/bin" ]; then
         local miniconda_tmp_dir="$HOME/miniconda_tmp"
         mkdir -p "$miniconda_tmp_dir"
-        wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O "$miniconda_tmp_dir/miniconda_installer.sh"
+        local miniconda_arch
+        miniconda_arch=$(uname -m)
+        wget "https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-${miniconda_arch}.sh" -O "$miniconda_tmp_dir/miniconda_installer.sh"
         bash "$miniconda_tmp_dir/miniconda_installer.sh" -b -u -p "$CONDA_DIR"
         rm -rf "$miniconda_tmp_dir"
         eval "$("$CONDA_DIR/bin/conda" 'shell.bash' 'hook')"
@@ -906,6 +984,10 @@ run_main_operations() {
     log_info "Installing essential packages, development tools, and server utilities..."
     install_base_packages
     log_success "Essential packages installed."
+
+    # --- Resolve tool versions (auto-detect latest LTS/stable after package lists are fresh) ---
+    resolve_tool_versions
+
     set +e  # Disable exit-on-error — from here, optional components are isolated
 
     # --- Optional components (each isolated — failure in one doesn't stop others) ---
@@ -945,7 +1027,7 @@ run_main_operations() {
     fi
 
     if [ "$INSTALL_JAVA" = true ]; then
-        run_component "Java (OpenJDK $JAVA_VERSION)" install_java
+        run_component "Java (OpenJDK ${JAVA_VERSION})" install_java
     fi
 
     if [ "$INSTALL_CPP" = true ]; then
@@ -957,7 +1039,7 @@ run_main_operations() {
             log_info "Go already installed: $(go version). Skipping."
             SKIPPED_COMPONENTS+=("Go (already installed)")
         else
-            run_component "Go $GO_VERSION" install_go
+            run_component "Go ${GO_VERSION}" install_go
         fi
     fi
 
