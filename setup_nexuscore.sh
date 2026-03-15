@@ -1,4 +1,5 @@
-# NexusCore Setup Script v3.2 for Ubuntu 24.04.2 LTS
+# NexusCore Setup Script v3.3 — Multi-Distribution Linux Support
+# Supported: Ubuntu, Pop!_OS, Zorin OS (Debian-based) and Fedora (RPM-based)
 # Resilient single-user setup with interactive prompts
 # Components are isolated — a failure in one does not stop the rest
 
@@ -7,8 +8,9 @@ set -uo pipefail
 
 # --- Configuration (defaults, overridden by interactive prompts) ---
 ADMIN_USER="$USER"
-JAVA_VERSION="17"
-GO_VERSION="1.23.6"
+JAVA_VERSION=""   # Auto-detected: latest LTS from package manager
+GO_VERSION=""     # Auto-detected: latest stable from go.dev
+NVM_VERSION=""    # Auto-detected: latest release from GitHub
 INSTALL_DOCKER=false
 INSTALL_PYTHON=false
 INSTALL_MINICONDA=false
@@ -28,6 +30,11 @@ NEW_HOSTNAME=""
 SETUP_UNATTENDED_UPGRADES=false
 CONFIGURE_SSH=false
 ENABLE_PASSWORD_AUTH=true
+
+# --- Distribution Detection ---
+DISTRO_FAMILY=""   # "debian" or "fedora"
+DISTRO_ID=""       # e.g., "ubuntu", "pop", "zorin", "fedora"
+DISTRO_VERSION=""  # e.g., "24.04", "22.04", "40"
 
 # --- Cleanup Handler ---
 declare -a CLEANUP_ACTIONS_ON_FAILURE # Stores commands or function calls for cleanup
@@ -109,6 +116,184 @@ apt_retry() {
     return 1
 }
 
+# Retry wrapper for dnf operations
+dnf_retry() {
+    local max_attempts=3
+    local attempt=1
+    while [ $attempt -le $max_attempts ]; do
+        if sudo dnf "$@"; then
+            return 0
+        fi
+        log_warning "dnf command failed (attempt $attempt/$max_attempts). Retrying in 10 seconds..."
+        sleep 10
+        ((attempt++))
+    done
+    log_error "dnf command failed after $max_attempts attempts."
+    return 1
+}
+
+# --- Distribution Detection & Package Manager Abstraction ---
+detect_distro() {
+    if [[ -f /etc/os-release ]]; then
+        . /etc/os-release
+        DISTRO_ID="$ID"
+        DISTRO_VERSION="${VERSION_ID:-unknown}"
+        case "$ID" in
+            ubuntu|pop|zorin)
+                DISTRO_FAMILY="debian"
+                ;;
+            fedora)
+                DISTRO_FAMILY="fedora"
+                ;;
+            *)
+                # Check ID_LIKE for derivatives
+                if [[ "${ID_LIKE:-}" == *"ubuntu"* ]] || [[ "${ID_LIKE:-}" == *"debian"* ]]; then
+                    DISTRO_FAMILY="debian"
+                elif [[ "${ID_LIKE:-}" == *"fedora"* ]]; then
+                    DISTRO_FAMILY="fedora"
+                else
+                    log_error "Unsupported distribution: $ID"
+                    return 1
+                fi
+                ;;
+        esac
+    else
+        log_error "Unable to determine OS. /etc/os-release not found."
+        return 1
+    fi
+    log_info "Detected: $DISTRO_ID $DISTRO_VERSION (family: $DISTRO_FAMILY)"
+    return 0
+}
+
+get_arch() {
+    local arch
+    arch=$(uname -m)
+    case "$arch" in
+        x86_64)  echo "amd64" ;;
+        aarch64) echo "arm64" ;;
+        armv7l)  echo "armhf" ;;
+        *)       echo "$arch" ;;
+    esac
+}
+
+pkg_update() {
+    if [[ "$DISTRO_FAMILY" == "debian" ]]; then
+        apt_retry update
+    elif [[ "$DISTRO_FAMILY" == "fedora" ]]; then
+        # dnf check-update returns 100 if updates are available, 0 if none
+        sudo dnf check-update || true
+    fi
+}
+
+pkg_upgrade() {
+    if [[ "$DISTRO_FAMILY" == "debian" ]]; then
+        apt_retry -y upgrade
+    elif [[ "$DISTRO_FAMILY" == "fedora" ]]; then
+        dnf_retry upgrade -y
+    fi
+}
+
+pkg_install() {
+    if [[ "$DISTRO_FAMILY" == "debian" ]]; then
+        apt_retry -y install "$@"
+    elif [[ "$DISTRO_FAMILY" == "fedora" ]]; then
+        dnf_retry install -y "$@"
+    fi
+}
+
+install_base_packages() {
+    if [[ "$DISTRO_FAMILY" == "debian" ]]; then
+        apt_retry -y install \
+            git curl wget build-essential software-properties-common apt-transport-https \
+            ca-certificates gnupg lsb-release unzip zip make cmake pkg-config autoconf automake \
+            libtool gettext tree htop btop iotop iftop ncdu gnupg2 pass neofetch \
+            tmux screen vim nano jq net-tools dnsutils rsync socat mtr-tiny nload \
+            sysstat logrotate cron
+    elif [[ "$DISTRO_FAMILY" == "fedora" ]]; then
+        dnf_retry groupinstall -y "Development Tools"
+        dnf_retry install -y \
+            git curl wget gcc gcc-c++ make cmake pkgconf autoconf automake \
+            libtool gettext tree htop btop iotop iftop ncdu gnupg2 pass neofetch \
+            tmux screen vim-enhanced nano jq net-tools bind-utils rsync socat mtr nload \
+            sysstat logrotate cronie zip unzip ca-certificates
+    fi
+}
+
+# --- Version Detection (auto-detect latest LTS/stable versions) ---
+
+# Detect latest available Java LTS version from the package manager
+# Java LTS versions: 8, 11, 17, 21, 25, ...
+detect_java_lts_version() {
+    local lts_versions=("25" "21" "17" "11" "8")
+    if [[ "$DISTRO_FAMILY" == "debian" ]]; then
+        for v in "${lts_versions[@]}"; do
+            if apt-cache show "openjdk-${v}-jdk" &>/dev/null; then
+                echo "$v"
+                return 0
+            fi
+        done
+    elif [[ "$DISTRO_FAMILY" == "fedora" ]]; then
+        for v in "${lts_versions[@]}"; do
+            if dnf list available "java-${v}-openjdk" &>/dev/null 2>&1; then
+                echo "$v"
+                return 0
+            fi
+        done
+    fi
+    echo "21"  # Fallback to latest known LTS
+}
+
+# Detect latest stable Go version from go.dev
+detect_go_version() {
+    local version
+    # Try fetching from the official Go download API
+    version=$(curl -fsSL --connect-timeout 5 'https://go.dev/dl/?mode=json' 2>/dev/null \
+        | grep -oP '"version":\s*"go\K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    if [ -n "$version" ]; then
+        echo "$version"
+        return 0
+    fi
+    # Fallback: parse the Go downloads page
+    version=$(curl -fsSL --connect-timeout 5 'https://go.dev/VERSION?m=text' 2>/dev/null \
+        | head -1 | sed 's/^go//')
+    if [ -n "$version" ]; then
+        echo "$version"
+        return 0
+    fi
+    echo "1.24.1"  # Fallback to a known stable version
+}
+
+# Detect latest NVM version from GitHub
+detect_nvm_version() {
+    local version
+    version=$(curl -fsSL --connect-timeout 5 'https://api.github.com/repos/nvm-sh/nvm/releases/latest' 2>/dev/null \
+        | grep -oP '"tag_name":\s*"\K[^"]+')
+    if [ -n "$version" ]; then
+        echo "$version"
+        return 0
+    fi
+    echo "v0.40.1"  # Fallback to a known stable version
+}
+
+# Resolve all auto-detected versions (called after package lists are updated)
+resolve_tool_versions() {
+    if [ -z "$JAVA_VERSION" ] && [ "$INSTALL_JAVA" = true ]; then
+        log_info "Detecting latest Java LTS version..."
+        JAVA_VERSION=$(detect_java_lts_version)
+        log_info "Java LTS version resolved: $JAVA_VERSION"
+    fi
+    if [ -z "$GO_VERSION" ] && [ "$INSTALL_GO" = true ]; then
+        log_info "Detecting latest Go stable version..."
+        GO_VERSION=$(detect_go_version)
+        log_info "Go version resolved: $GO_VERSION"
+    fi
+    if [ -z "$NVM_VERSION" ] && [ "$INSTALL_NODEJS" = true ]; then
+        log_info "Detecting latest NVM version..."
+        NVM_VERSION=$(detect_nvm_version)
+        log_info "NVM version resolved: $NVM_VERSION"
+    fi
+}
+
 # --- Helper Functions ---
 log_info() {
     echo -e "\n\033[1;34m[INFO]\033[0m $1"
@@ -143,7 +328,7 @@ print_banner() {
     echo "██  ██ ██ ██       ██ ██  ██    ██      ██ ██      ██    ██ ██   ██ ██      "
     echo "██   ████ ███████ ██   ██  ██████  ███████  ██████  ██████  ██   ██ ███████ "
     echo -e "\033[0m"
-    echo -e "\033[1;36mComplete Server Setup Script v3.2 for Ubuntu 24.04.2 LTS\033[0m"
+    echo -e "\033[1;36mComplete Server Setup Script v3.3 — Multi-Distribution Linux Support\033[0m"
     echo
 }
 
@@ -209,11 +394,11 @@ interactive_setup() {
         INSTALL_PYTHON=true
     fi
 
-    if ask_yes_no "  Install Java (OpenJDK $JAVA_VERSION)?"; then
+    if ask_yes_no "  Install Java (OpenJDK, latest LTS)?"; then
         INSTALL_JAVA=true
     fi
 
-    if ask_yes_no "  Install Go ($GO_VERSION)?"; then
+    if ask_yes_no "  Install Go (latest stable)?"; then
         INSTALL_GO=true
     fi
 
@@ -261,9 +446,9 @@ interactive_setup() {
     echo -e "  Auto-updates:      $SETUP_UNATTENDED_UPGRADES"
     echo -e "  \033[1;36m[Development]\033[0m"
     echo -e "  Python:            $INSTALL_PYTHON"
-    echo -e "  Java:              $INSTALL_JAVA"
-    echo -e "  Go:                $INSTALL_GO"
-    echo -e "  Node.js:           $INSTALL_NODEJS"
+    echo -e "  Java:              $INSTALL_JAVA (latest LTS — auto-detected after update)"
+    echo -e "  Go:                $INSTALL_GO (latest stable — auto-detected)"
+    echo -e "  Node.js:           $INSTALL_NODEJS (latest LTS via NVM)"
     echo -e "  C/C++:             $INSTALL_CPP"
     echo -e "  Docker:            $INSTALL_DOCKER"
     echo -e "  Miniconda:         $INSTALL_MINICONDA"
@@ -281,24 +466,32 @@ interactive_setup() {
 }
 
 check_os_compatibility() {
-    if [[ -f /etc/os-release ]]; then
-        . /etc/os-release
-        if [[ "$ID" != "ubuntu" ]]; then
-            log_error "This script is designed for Ubuntu only. Detected: $ID"
-            return 1
-        fi
-        
-        if [[ ! "$VERSION_ID" =~ ^24\.04.* ]]; then
-            log_warning "This script is optimized for Ubuntu 24.04. Detected: $VERSION_ID"
-            read -p "Do you want to continue anyway? (y/N): " -r
-            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-                return 1
+    detect_distro
+
+    case "$DISTRO_ID" in
+        ubuntu)
+            if [[ ! "$DISTRO_VERSION" =~ ^24\.04.* ]]; then
+                log_warning "This script is optimized for Ubuntu 24.04. Detected: $DISTRO_VERSION"
+                read -p "Do you want to continue anyway? (y/N): " -r
+                if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                    return 1
+                fi
             fi
-        fi
-    else
-        log_error "Unable to determine OS. This script is designed for Ubuntu 24.04 LTS."
-        return 1
-    fi
+            ;;
+        pop|zorin)
+            log_info "Detected $DISTRO_ID $DISTRO_VERSION (Ubuntu-based). Proceeding with Debian/Ubuntu compatibility."
+            ;;
+        fedora)
+            log_info "Detected Fedora $DISTRO_VERSION. Using DNF package manager."
+            ;;
+        *)
+            if [[ "$DISTRO_FAMILY" == "debian" ]]; then
+                log_warning "Detected $DISTRO_ID (Debian-based). Proceeding with Debian compatibility."
+            elif [[ "$DISTRO_FAMILY" == "fedora" ]]; then
+                log_warning "Detected $DISTRO_ID (Fedora-based). Proceeding with Fedora compatibility."
+            fi
+            ;;
+    esac
     return 0
 }
 
@@ -359,8 +552,17 @@ install_hostname() {
 }
 
 install_timezone() {
-    log_info "You will be prompted to select your timezone..."
-    sudo dpkg-reconfigure tzdata
+    if [[ "$DISTRO_FAMILY" == "debian" ]]; then
+        log_info "You will be prompted to select your timezone..."
+        sudo dpkg-reconfigure tzdata
+    elif [[ "$DISTRO_FAMILY" == "fedora" ]]; then
+        log_info "Current timezone: $(timedatectl show --property=Timezone --value 2>/dev/null || echo 'unknown')"
+        log_info "Available timezones can be listed with: timedatectl list-timezones"
+        read -p "Enter timezone (e.g., America/New_York, UTC): " -r tz_input
+        if [ -n "$tz_input" ]; then
+            sudo timedatectl set-timezone "$tz_input"
+        fi
+    fi
     log_success "Timezone configured to $(cat /etc/timezone 2>/dev/null || timedatectl show --property=Timezone --value)."
 }
 
@@ -397,38 +599,63 @@ install_ssh_hardening() {
 }
 
 install_ufw() {
-    if ! command -v ufw &> /dev/null; then sudo apt install -y ufw; fi
-    sudo ufw allow ssh
-    sudo ufw allow 80/tcp
-    sudo ufw allow 443/tcp
-    sudo ufw --force enable
-    sudo ufw status verbose
-    log_success "UFW configured and enabled."
+    if [[ "$DISTRO_FAMILY" == "debian" ]]; then
+        if ! command -v ufw &> /dev/null; then sudo apt install -y ufw; fi
+        sudo ufw allow ssh
+        sudo ufw allow 80/tcp
+        sudo ufw allow 443/tcp
+        sudo ufw --force enable
+        sudo ufw status verbose
+        log_success "UFW configured and enabled."
+    elif [[ "$DISTRO_FAMILY" == "fedora" ]]; then
+        sudo systemctl enable --now firewalld
+        sudo firewall-cmd --permanent --add-service=ssh
+        sudo firewall-cmd --permanent --add-service=http
+        sudo firewall-cmd --permanent --add-service=https
+        sudo firewall-cmd --reload
+        sudo firewall-cmd --list-all
+        log_success "Firewalld configured and enabled."
+    fi
 }
 
 install_python() {
-    if command -v python3 &> /dev/null && dpkg -s python3-pip &> /dev/null; then
-        log_info "Python 3 and pip already installed. Ensuring venv and dev headers..."
+    if [[ "$DISTRO_FAMILY" == "debian" ]]; then
+        if command -v python3 &> /dev/null && dpkg -s python3-pip &> /dev/null; then
+            log_info "Python 3 and pip already installed. Ensuring venv and dev headers..."
+        fi
+        sudo apt install -y python3 python3-pip python3-venv python3-dev
+    elif [[ "$DISTRO_FAMILY" == "fedora" ]]; then
+        if command -v python3 &> /dev/null && rpm -q python3-pip &> /dev/null; then
+            log_info "Python 3 and pip already installed. Ensuring dev headers..."
+        fi
+        sudo dnf install -y python3 python3-pip python3-devel
     fi
-    sudo apt install -y python3 python3-pip python3-venv python3-dev
-    log_success "Python 3, pip, venv, and dev headers are set up."
+    log_success "Python 3, pip, and dev headers are set up."
 }
 
 install_java() {
     if java -version 2>&1 | grep -q "openjdk version"; then
         log_info "Java already installed: $(java -version 2>&1 | head -1)"
     fi
-    sudo apt install -y "openjdk-${JAVA_VERSION}-jdk" "openjdk-${JAVA_VERSION}-jre"
-    log_success "OpenJDK $JAVA_VERSION (JDK & JRE) installed."
+    if [[ "$DISTRO_FAMILY" == "debian" ]]; then
+        sudo apt install -y "openjdk-${JAVA_VERSION}-jdk" "openjdk-${JAVA_VERSION}-jre"
+    elif [[ "$DISTRO_FAMILY" == "fedora" ]]; then
+        sudo dnf install -y "java-${JAVA_VERSION}-openjdk" "java-${JAVA_VERSION}-openjdk-devel"
+    fi
+    log_success "OpenJDK $JAVA_VERSION installed."
 }
 
 install_cpp() {
-    sudo apt install -y gcc g++ gdb clang valgrind
+    if [[ "$DISTRO_FAMILY" == "debian" ]]; then
+        sudo apt install -y gcc g++ gdb clang valgrind
+    elif [[ "$DISTRO_FAMILY" == "fedora" ]]; then
+        sudo dnf install -y gcc gcc-c++ gdb clang valgrind
+    fi
     log_success "C/C++ toolchain installed."
 }
 
 install_go() {
-    local go_tar="go${GO_VERSION}.linux-$(dpkg --print-architecture).tar.gz"
+    local go_tar="go${GO_VERSION}.linux-$(get_arch).tar.gz"
     local go_tmp_path="/tmp/$go_tar"
     wget -O "$go_tmp_path" "https://go.dev/dl/$go_tar"
     sudo rm -rf /usr/local/go
@@ -455,7 +682,7 @@ install_nodejs() {
     fi
     if [ ! -d "$NVM_DIR" ]; then
         mkdir -p "$NVM_DIR"
-        curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+        curl -o- "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh" | bash
         [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
         [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
         if command -v nvm &> /dev/null; then
@@ -505,21 +732,35 @@ install_docker() {
         log_success "Docker is ready."
         return 0
     fi
-    local docker_gpg_key_path="/etc/apt/keyrings/docker.gpg"
-    local docker_repo_list_path="/etc/apt/sources.list.d/docker.list"
-    sudo install -m 0755 -d /etc/apt/keyrings
-    if [ ! -f "$docker_gpg_key_path" ]; then
-        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o "$docker_gpg_key_path"
-        sudo chmod a+r "$docker_gpg_key_path"
+    if [[ "$DISTRO_FAMILY" == "debian" ]]; then
+        local docker_gpg_key_path="/etc/apt/keyrings/docker.gpg"
+        local docker_repo_list_path="/etc/apt/sources.list.d/docker.list"
+        # For Ubuntu derivatives (Pop!_OS, Zorin), use the "ubuntu" Docker repo
+        local docker_distro="ubuntu"
+        local docker_codename
+        docker_codename=$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+        if [ -z "$docker_codename" ]; then
+            log_error "Unable to determine distribution codename for Docker repository."
+            return 1
+        fi
+        sudo install -m 0755 -d /etc/apt/keyrings
+        if [ ! -f "$docker_gpg_key_path" ]; then
+            curl -fsSL "https://download.docker.com/linux/${docker_distro}/gpg" | sudo gpg --dearmor -o "$docker_gpg_key_path"
+            sudo chmod a+r "$docker_gpg_key_path"
+        fi
+        if [ ! -f "$docker_repo_list_path" ]; then
+            echo \
+              "deb [arch=$(get_arch) signed-by=$docker_gpg_key_path] https://download.docker.com/linux/${docker_distro} \
+              ${docker_codename} stable" | \
+              sudo tee "$docker_repo_list_path" > /dev/null
+            sudo apt update
+        fi
+        sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    elif [[ "$DISTRO_FAMILY" == "fedora" ]]; then
+        sudo dnf -y install dnf-plugins-core
+        sudo dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
+        sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
     fi
-    if [ ! -f "$docker_repo_list_path" ]; then
-        echo \
-          "deb [arch=$(dpkg --print-architecture) signed-by=$docker_gpg_key_path] https://download.docker.com/linux/ubuntu \
-          $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-          sudo tee "$docker_repo_list_path" > /dev/null
-        sudo apt update
-    fi
-    sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
     if ! getent group docker > /dev/null; then
         sudo groupadd docker
         log_info "Created docker group."
@@ -541,7 +782,9 @@ install_miniconda() {
     if [ ! -d "$CONDA_DIR/bin" ]; then
         local miniconda_tmp_dir="$HOME/miniconda_tmp"
         mkdir -p "$miniconda_tmp_dir"
-        wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O "$miniconda_tmp_dir/miniconda_installer.sh"
+        local miniconda_arch
+        miniconda_arch=$(uname -m)
+        wget "https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-${miniconda_arch}.sh" -O "$miniconda_tmp_dir/miniconda_installer.sh"
         bash "$miniconda_tmp_dir/miniconda_installer.sh" -b -u -p "$CONDA_DIR"
         rm -rf "$miniconda_tmp_dir"
         eval "$("$CONDA_DIR/bin/conda" 'shell.bash' 'hook')"
@@ -563,7 +806,11 @@ install_miniconda() {
 }
 
 install_monitoring_tools() {
-    sudo apt install -y glances bpytop nload lm-sensors
+    if [[ "$DISTRO_FAMILY" == "debian" ]]; then
+        sudo apt install -y glances bpytop nload lm-sensors
+    elif [[ "$DISTRO_FAMILY" == "fedora" ]]; then
+        sudo dnf install -y glances bpytop nload lm_sensors
+    fi
     log_success "Monitoring tools installed."
 }
 
@@ -574,22 +821,41 @@ install_nginx() {
         log_success "Nginx is ready."
         return 0
     fi
-    sudo apt install -y nginx
+    if [[ "$DISTRO_FAMILY" == "debian" ]]; then
+        sudo apt install -y nginx
+    elif [[ "$DISTRO_FAMILY" == "fedora" ]]; then
+        sudo dnf install -y nginx
+    fi
     sudo systemctl enable --now nginx
-    if [ "$SETUP_UFW" = true ] && sudo ufw status | grep -qw active; then
-        sudo ufw allow 'Nginx Full'
+    if [ "$SETUP_UFW" = true ]; then
+        if [[ "$DISTRO_FAMILY" == "debian" ]] && sudo ufw status | grep -qw active; then
+            sudo ufw allow 'Nginx Full'
+        elif [[ "$DISTRO_FAMILY" == "fedora" ]] && systemctl is-active --quiet firewalld; then
+            sudo firewall-cmd --permanent --add-service=http
+            sudo firewall-cmd --permanent --add-service=https
+            sudo firewall-cmd --reload
+        fi
     fi
     log_success "Nginx installed and running."
 }
 
 install_cloudflared() {
-    ARCH=$(dpkg --print-architecture)
-    CLOUDFLARED_LATEST_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}.deb"
-    local cloudflared_deb_path="/tmp/cloudflared.deb"
-    wget -O "$cloudflared_deb_path" "${CLOUDFLARED_LATEST_URL}"
-    sudo dpkg -i "$cloudflared_deb_path"
-    sudo apt-get install -f -y
-    rm -f "$cloudflared_deb_path"
+    local arch
+    arch=$(get_arch)
+    if [[ "$DISTRO_FAMILY" == "debian" ]]; then
+        local cloudflared_url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch}.deb"
+        local cloudflared_pkg_path="/tmp/cloudflared.deb"
+        wget -O "$cloudflared_pkg_path" "$cloudflared_url"
+        sudo dpkg -i "$cloudflared_pkg_path"
+        sudo apt-get install -f -y
+        rm -f "$cloudflared_pkg_path"
+    elif [[ "$DISTRO_FAMILY" == "fedora" ]]; then
+        local cloudflared_url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch}.rpm"
+        local cloudflared_pkg_path="/tmp/cloudflared.rpm"
+        wget -O "$cloudflared_pkg_path" "$cloudflared_url"
+        sudo dnf install -y "$cloudflared_pkg_path"
+        rm -f "$cloudflared_pkg_path"
+    fi
     if command -v cloudflared &> /dev/null; then
         log_success "cloudflared $(cloudflared --version) installed."
     else
@@ -599,17 +865,27 @@ install_cloudflared() {
 }
 
 install_fail2ban() {
-    sudo apt install -y fail2ban
+    if [[ "$DISTRO_FAMILY" == "debian" ]]; then
+        sudo apt install -y fail2ban
+    elif [[ "$DISTRO_FAMILY" == "fedora" ]]; then
+        sudo dnf install -y fail2ban
+    fi
     sudo systemctl enable --now fail2ban
     JAIL_LOCAL_CONF="/etc/fail2ban/jail.local"
     if [ ! -f "$JAIL_LOCAL_CONF" ] || ! grep -qE "^\s*\[sshd\]" "$JAIL_LOCAL_CONF"; then
         backup_file "$JAIL_LOCAL_CONF"
+        local sshd_logpath
+        if [[ "$DISTRO_FAMILY" == "debian" ]]; then
+            sshd_logpath="/var/log/auth.log"
+        elif [[ "$DISTRO_FAMILY" == "fedora" ]]; then
+            sshd_logpath="%(sshd_log)s"
+        fi
         sudo bash -c "cat >> '$JAIL_LOCAL_CONF'" << EOF
 
 [sshd]
 enabled = true
 port = ssh
-logpath = /var/log/auth.log
+logpath = $sshd_logpath
 maxretry = 5
 bantime = 1h
 findtime = 10m
@@ -622,10 +898,17 @@ EOF
 }
 
 install_unattended_upgrades() {
-    sudo apt install -y unattended-upgrades apt-listchanges
-    echo 'APT::Periodic::Update-Package-Lists "1";' | sudo tee /etc/apt/apt.conf.d/20auto-upgrades > /dev/null
-    echo 'APT::Periodic::Unattended-Upgrade "1";' | sudo tee -a /etc/apt/apt.conf.d/20auto-upgrades > /dev/null
-    log_success "Automatic security updates enabled."
+    if [[ "$DISTRO_FAMILY" == "debian" ]]; then
+        sudo apt install -y unattended-upgrades apt-listchanges
+        echo 'APT::Periodic::Update-Package-Lists "1";' | sudo tee /etc/apt/apt.conf.d/20auto-upgrades > /dev/null
+        echo 'APT::Periodic::Unattended-Upgrade "1";' | sudo tee -a /etc/apt/apt.conf.d/20auto-upgrades > /dev/null
+        log_success "Automatic security updates enabled (unattended-upgrades)."
+    elif [[ "$DISTRO_FAMILY" == "fedora" ]]; then
+        sudo dnf install -y dnf-automatic
+        sudo sed -i 's/^apply_updates.*/apply_updates = yes/' /etc/dnf/automatic.conf
+        sudo systemctl enable --now dnf-automatic.timer
+        log_success "Automatic security updates enabled (dnf-automatic)."
+    fi
 }
 
 collect_system_logs() {
@@ -677,7 +960,7 @@ run_main_operations() {
     set -e
     check_os_compatibility
 
-    log_info "Starting NexusCore Server Setup v3.2 for user: $ADMIN_USER"
+    log_info "Starting NexusCore Server Setup v3.3 for user: $ADMIN_USER"
     if [ "$(id -u)" = "0" ]; then
        log_error "This script should not be run as root. Run as a sudo-enabled user."
        exit 1
@@ -692,20 +975,19 @@ run_main_operations() {
 
     # --- Critical: System update & upgrade (must succeed) ---
     log_info "Updating package lists and upgrading existing packages..."
-    log_info "(If another process is using apt, we will retry automatically.)"
-    apt_retry update
-    apt_retry -y upgrade
+    log_info "(If another process is using the package manager, we will retry automatically.)"
+    pkg_update
+    pkg_upgrade
     log_success "System updated and upgraded."
 
     # --- Critical: Base packages (must succeed) ---
     log_info "Installing essential packages, development tools, and server utilities..."
-    apt_retry -y install \
-        git curl wget build-essential software-properties-common apt-transport-https \
-        ca-certificates gnupg lsb-release unzip zip make cmake pkg-config autoconf automake \
-        libtool gettext tree htop btop iotop iftop ncdu gnupg2 pass neofetch \
-        tmux screen vim nano jq net-tools dnsutils rsync socat mtr-tiny nload \
-        sysstat logrotate cron
+    install_base_packages
     log_success "Essential packages installed."
+
+    # --- Resolve tool versions (auto-detect latest LTS/stable after package lists are fresh) ---
+    resolve_tool_versions
+
     set +e  # Disable exit-on-error — from here, optional components are isolated
 
     # --- Optional components (each isolated — failure in one doesn't stop others) ---
@@ -745,7 +1027,7 @@ run_main_operations() {
     fi
 
     if [ "$INSTALL_JAVA" = true ]; then
-        run_component "Java (OpenJDK $JAVA_VERSION)" install_java
+        run_component "Java (OpenJDK ${JAVA_VERSION})" install_java
     fi
 
     if [ "$INSTALL_CPP" = true ]; then
@@ -757,7 +1039,7 @@ run_main_operations() {
             log_info "Go already installed: $(go version). Skipping."
             SKIPPED_COMPONENTS+=("Go (already installed)")
         else
-            run_component "Go $GO_VERSION" install_go
+            run_component "Go ${GO_VERSION}" install_go
         fi
     fi
 

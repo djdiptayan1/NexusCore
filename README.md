@@ -1,11 +1,11 @@
 <div align="center">
 
-[![Ubuntu Version](https://img.shields.io/badge/Ubuntu-24.04.2_LTS-orange.svg)](https://ubuntu.com/)
+[![Linux Support](https://img.shields.io/badge/Linux-Ubuntu%20|%20Pop!__OS%20|%20Zorin%20|%20Fedora-orange.svg)](https://github.com/djdiptayan1/NexusCore)
 [![Bash Script](https://img.shields.io/badge/Bash-Script-brightgreen.svg)](https://www.gnu.org/software/bash/)
-[![Version](https://img.shields.io/badge/Version-3.2-blue.svg)](https://github.com/djdiptayan1/NexusCore)
+[![Version](https://img.shields.io/badge/Version-3.3-blue.svg)](https://github.com/djdiptayan1/NexusCore)
 
 </div>
-<!-- # NexusCore - Ubuntu Server Setup Toolkit -->
+<!-- # NexusCore - Linux Server Setup Toolkit -->
 
 <div align="center">
 <pre style="color:#32CD32; font-weight:bold; text-align:center;">
@@ -17,11 +17,17 @@
 </pre>
 </div>
 
-> A complete Ubuntu 24.04 LTS server provisioning toolkit with interactive setup
+> A complete Linux server provisioning toolkit with interactive setup — supports Ubuntu, Pop!_OS, Zorin OS, and Fedora
 
 ## 📋 Overview
 
-NexusCore is a complete server setup script for Ubuntu 24.04 LTS. It uses interactive prompts to let you choose exactly what to install — perfect for first-time setup of bare metal servers, VPS instances (Hostinger, DigitalOcean, etc.), or any fresh Ubuntu server.
+NexusCore is a complete server setup script for multiple Linux distributions. It uses interactive prompts to let you choose exactly what to install — perfect for first-time setup of bare metal servers, VPS instances (Hostinger, DigitalOcean, etc.), or any fresh Linux server.
+
+### Supported Distributions
+- **Ubuntu** 24.04 LTS (and other versions with a warning)
+- **Pop!_OS** (Ubuntu-based)
+- **Zorin OS** (Ubuntu-based)
+- **Fedora** (uses DNF package manager)
 
 ## 🔧 Features
 
@@ -34,7 +40,7 @@ NexusCore is a complete server setup script for Ubuntu 24.04 LTS. It uses intera
 ### Resilient Execution
 - ✅ **Isolated components** — failure in one component doesn't stop the rest
 - ✅ **Already-installed detection** — skips Go, Docker, Cloudflared, swap, etc. if already present
-- ✅ **apt retry logic** — automatically retries if apt is locked by another process
+- ✅ **apt retry logic** — automatically retries if apt/dnf is locked by another process
 - ✅ **Setup summary** — shows succeeded ✓, skipped →, and failed ✗ components at the end
 - ✅ **Re-runnable** — safe to run again; it picks up where it left off
 
@@ -43,14 +49,14 @@ NexusCore is a complete server setup script for Ubuntu 24.04 LTS. It uses intera
 - ✅ Timezone setup
 - ✅ Swap file creation (configurable size, recommended for VPS)
 - ✅ SSH hardening (disable root login, password auth toggle, max auth tries)
-- ✅ UFW (Uncomplicated Firewall) setup
-- ✅ Automatic security updates (unattended-upgrades)
+- ✅ UFW (Uncomplicated Firewall) / Firewalld setup
+- ✅ Automatic security updates (unattended-upgrades / dnf-automatic)
 - ✅ Fail2ban for SSH brute-force protection
 
 ### Development Environment
 - ✅ Multiple programming languages and runtimes:
   - Python 3 with pip, venv, and dev headers
-  - OpenJDK 17 (JDK & JRE)
+  - OpenJDK (latest LTS — auto-detected)
   - Go (Golang)
   - C/C++ toolchain (gcc, g++, gdb, clang)
   - Node.js LTS via NVM (Node Version Manager)
@@ -77,7 +83,7 @@ NexusCore is a complete server setup script for Ubuntu 24.04 LTS. It uses intera
 ## 🚀 Quick Start
 
 ### Prerequisites
-- A clean Ubuntu 24.04.2 LTS installation
+- A supported Linux distribution: Ubuntu (24.04 LTS recommended), Pop!_OS, Zorin OS, or Fedora
 - A user account with sudo privileges
 
 ### Installation
@@ -117,11 +123,11 @@ NexusCore is a complete server setup script for Ubuntu 24.04 LTS. It uses intera
 | | Timezone | Interactive timezone setup |
 | | Swap | Configurable swap file (e.g. 1G, 2G, 4G) |
 | | SSH Hardening | Root login disabled, password auth toggle, max auth tries |
-| | UFW | Firewall with SSH, HTTP, HTTPS rules |
-| | Auto-updates | unattended-upgrades for automatic security patches |
+| | UFW | Firewall with SSH, HTTP, HTTPS rules (UFW on Debian-based, Firewalld on Fedora) |
+| | Auto-updates | unattended-upgrades (Debian-based) / dnf-automatic (Fedora) |
 | **Dev** | Python | Python 3, pip, venv, dev headers |
-| | Java | OpenJDK 17 (JDK & JRE) |
-| | Go | Go 1.23.6 |
+| | Java | OpenJDK (latest LTS — auto-detected from package manager) |
+| | Go | Latest stable (auto-detected from go.dev) |
 | | Node.js | NVM + LTS Node.js + yarn, typescript, nodemon, pm2 |
 | | C/C++ | gcc, g++, gdb, clang, valgrind |
 | | Docker | Docker Engine + Docker Compose plugin |

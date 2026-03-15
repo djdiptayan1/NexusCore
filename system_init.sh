@@ -297,8 +297,28 @@ if command -v apt &> /dev/null; then
     else
         echo -e "${RED}✗ Quantum synchronization failed${RESET}"
     fi
+elif command -v dnf &> /dev/null; then
+    progress_bar 3 "Synchronizing quantum package databases"
+    UPGRADABLE_PACKAGES=$(sudo dnf check-update 2>/dev/null | grep -E '^\S+\s+\S+\s+\S+' || true)
+    
+    echo -e "${GREEN}✓ Package database synchronized${RESET}"
+    
+    if [ -z "$UPGRADABLE_PACKAGES" ]; then
+        echo -e "${NEON_GREEN}${BOLD}🎯 SYSTEM STATUS: OPTIMAL${RESET}"
+        echo -e "${GREEN}► All packages are at their latest quantum state${RESET}"
+    else
+        NUM_UPGRADABLE=$(echo "$UPGRADABLE_PACKAGES" | wc -l)
+        echo -e "${YELLOW}${BOLD}⚡ UPGRADES DETECTED: ${NUM_UPGRADABLE} package(s)${RESET}"
+        echo -e "${CYAN}┌─ Pending Quantum Upgrades ────────────────────────────────┐${RESET}"
+        echo "$UPGRADABLE_PACKAGES" | head -10 | awk '{printf "│ %-54s │\n", $1}' | sed "s/^/\${CYAN}/" | sed "s/$/\${RESET}/"
+        if [ $NUM_UPGRADABLE -gt 10 ]; then
+            echo -e "${CYAN}│ ... and $((NUM_UPGRADABLE-10)) more packages$(printf "%*s" $((37-${#NUM_UPGRADABLE})) "") │${RESET}"
+        fi
+        echo -e "${CYAN}└────────────────────────────────────────────────────────────┘${RESET}"
+        echo -e "${WHITE}► Execute upgrade: ${NEON_BLUE}${BOLD}sudo dnf upgrade${RESET}"
+    fi
 else
-    echo -e "${YELLOW}⚠ APT quantum interface not detected${RESET}"
+    echo -e "${YELLOW}⚠ No supported package manager detected (apt/dnf)${RESET}"
 fi
 
 echo
