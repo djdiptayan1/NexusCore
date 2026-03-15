@@ -663,6 +663,10 @@ install_docker() {
         local docker_distro="ubuntu"
         local docker_codename
         docker_codename=$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+        if [ -z "$docker_codename" ]; then
+            log_error "Unable to determine distribution codename for Docker repository."
+            return 1
+        fi
         sudo install -m 0755 -d /etc/apt/keyrings
         if [ ! -f "$docker_gpg_key_path" ]; then
             curl -fsSL "https://download.docker.com/linux/${docker_distro}/gpg" | sudo gpg --dearmor -o "$docker_gpg_key_path"
