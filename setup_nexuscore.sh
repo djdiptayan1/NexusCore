@@ -55,6 +55,10 @@ fi
 sudo() {
     if [ "$RUNNING_AS_ROOT" = true ]; then
         if [ "${1:-}" = "-u" ]; then
+            if [ -z "${2:-}" ]; then
+                log_error "Invalid sudo usage: '-u' requires a target user."
+                return 1
+            fi
             shift 2
         fi
         "$@"
