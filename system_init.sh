@@ -43,6 +43,7 @@ NEON_BLUE='\033[38;5;39m'
 NEON_GREEN='\033[38;5;46m'
 NEON_PINK='\033[38;5;200m'
 ELECTRIC_BLUE='\033[38;5;27m'
+UPGRADE_TABLE_INNER_WIDTH=76
 
 # --- Enhanced Helper Functions ---
 print_header() {
@@ -262,8 +263,7 @@ display_installed_packages() {
     elif command -v rpm >/dev/null 2>&1; then
         for pkg in "${packages[@]}"; do
             local version
-            version=$(rpm -q --qf '%{VERSION}-%{RELEASE}' "$pkg" 2>/dev/null || true)
-            if [ -n "$version" ] && [ "$version" != "package $pkg is not installed" ]; then
+            if version=$(rpm -q --qf '%{VERSION}-%{RELEASE}' "$pkg" 2>/dev/null); then
                 printf "  %-20s %s\n" "$pkg" "$version"
                 found_any=true
             fi
@@ -276,6 +276,11 @@ display_installed_packages() {
     if [ "$found_any" = false ]; then
         echo -e "${YELLOW}  None of the tracked packages were detected on this system.${RESET}"
     fi
+}
+
+print_remaining_packages_line() {
+    local remaining="$1"
+    printf "${CYAN}│ %-${UPGRADE_TABLE_INNER_WIDTH}.${UPGRADE_TABLE_INNER_WIDTH}s │${RESET}\n" "... and ${remaining} more packages"
 }
 
 # --- Main Script Enhancements ---
@@ -325,12 +330,26 @@ if command -v apt &> /dev/null; then
         if [ -z "$UPGRADABLE_PACKAGES" ]; then
             echo -e "${GREEN}All installed packages are up to date.${RESET}"
         else
+            local apt_name_width=20
+            local apt_candidate_width=24
+            local apt_current_width=20
             NUM_UPGRADABLE=$(echo "$UPGRADABLE_PACKAGES" | wc -l)
             echo -e "${YELLOW}${BOLD}Upgrades available: ${NUM_UPGRADABLE} package(s)${RESET}"
             echo -e "${CYAN}┌─ Upgradable Packages (Name | Candidate Version | Current Version) ──────────┐${RESET}"
-            echo "$UPGRADABLE_PACKAGES" | head -10 | awk -F'/' '{split($2,a," "); current=a[5]; gsub(/]/,"",current); printf "│ %-20s | %-24s | %-20s │\n", $1, a[2], current}' | sed "s/^/\${CYAN}/" | sed "s/$/\${RESET}/"
+            echo "$UPGRADABLE_PACKAGES" | head -10 | awk -v name_w="$apt_name_width" -v cand_w="$apt_candidate_width" -v curr_w="$apt_current_width" '
+                match($0, /^([^/]+)\/[^ ]+ ([^ ]+) \[upgradable from: ([^]]+)\]$/, m) {
+                    printf "│ %-*.*s | %-*.*s | %-*.*s │\n", name_w, name_w, m[1], cand_w, cand_w, m[2], curr_w, curr_w, m[3]
+                    next
+                }
+                {
+                    split($1, package_parts, "/")
+                    package_name=package_parts[1]
+                    candidate_version=$2
+                    printf "│ %-*.*s | %-*.*s | %-*.*s │\n", name_w, name_w, package_name, cand_w, cand_w, candidate_version, curr_w, curr_w, "N/A"
+                }
+            ' | sed "s/^/\${CYAN}/" | sed "s/$/\${RESET}/"
             if [ $NUM_UPGRADABLE -gt 10 ]; then
-                echo -e "${CYAN}│ ... and $((NUM_UPGRADABLE-10)) more packages$(printf "%*s" $((38-${#NUM_UPGRADABLE})) "") │${RESET}"
+                print_remaining_packages_line "$((NUM_UPGRADABLE-10))"
             fi
             echo -e "${CYAN}└──────────────────────────────────────────────────────────────────────────────┘${RESET}"
             echo -e "${WHITE}Run: ${NEON_BLUE}${BOLD}sudo apt upgrade${RESET}"
@@ -348,12 +367,14 @@ elif command -v dnf &> /dev/null; then
     if [ -z "$UPGRADABLE_PACKAGES" ]; then
         echo -e "${GREEN}All installed packages are up to date.${RESET}"
     else
+        local dnf_name_width=30
+        local dnf_version_width=36
         NUM_UPGRADABLE=$(echo "$UPGRADABLE_PACKAGES" | wc -l)
         echo -e "${YELLOW}${BOLD}Upgrades available: ${NUM_UPGRADABLE} package(s)${RESET}"
         echo -e "${CYAN}┌─ Upgradable Packages (Name | Version) ─────────────────────────────────────┐${RESET}"
-        echo "$UPGRADABLE_PACKAGES" | head -10 | awk '{printf "│ %-30s | %-36s │\n", $1, $2}' | sed "s/^/\${CYAN}/" | sed "s/$/\${RESET}/"
+        echo "$UPGRADABLE_PACKAGES" | head -10 | awk -v name_w="$dnf_name_width" -v version_w="$dnf_version_width" '{printf "│ %-*.*s | %-*.*s │\n", name_w, name_w, $1, version_w, version_w, $2}' | sed "s/^/\${CYAN}/" | sed "s/$/\${RESET}/"
         if [ $NUM_UPGRADABLE -gt 10 ]; then
-            echo -e "${CYAN}│ ... and $((NUM_UPGRADABLE-10)) more packages$(printf "%*s" $((38-${#NUM_UPGRADABLE})) "") │${RESET}"
+            print_remaining_packages_line "$((NUM_UPGRADABLE-10))"
         fi
         echo -e "${CYAN}└──────────────────────────────────────────────────────────────────────────────┘${RESET}"
         echo -e "${WHITE}Run: ${NEON_BLUE}${BOLD}sudo dnf upgrade${RESET}"
@@ -372,7 +393,7 @@ echo
 print_subheader "SERVICE ORCHESTRATION"
 
 if [ ${#SERVICES_TO_RESTART[@]} -eq 0 ]; then
-    echo -e "${YELLOW}${BOLD}⚠ NO SERVICES CONFIGURED FOR QUANTUM RESTART${RESET}"
+    echo -e "${YELLOW}${BOLD}⚠ No services configured for restart${RESET}"
     echo -e "${GRAY}Configure services in SERVICES_TO_RESTART array${RESET}"
 else
     # Filter services that actually exist and are in the restart list
