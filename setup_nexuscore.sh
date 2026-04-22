@@ -49,11 +49,9 @@ if command -v sudo >/dev/null 2>&1; then
     HAS_NATIVE_SUDO=true
 fi
 
-# Root-compatible sudo wrapper:
-# - Non-root: delegate to native sudo
-# - Root: run commands directly, including "sudo -u user" calls used by this script
-sudo() {
-    if [ "$RUNNING_AS_ROOT" = true ]; then
+# Root-compatible sudo shim for systems where root is used and sudo is absent.
+if [ "$RUNNING_AS_ROOT" = true ] && [ "$HAS_NATIVE_SUDO" != true ]; then
+    sudo() {
         if [ "${1:-}" = "-u" ]; then
             if [ -z "${2:-}" ]; then
                 log_error "Invalid sudo usage: '-u' requires a target user."
@@ -61,18 +59,20 @@ sudo() {
             fi
             local target_user="$2"
             shift 2
+            if [ "$target_user" = "$(id -un)" ]; then
+                "$@"
+                return $?
+            fi
             if command -v runuser >/dev/null 2>&1; then
                 runuser -u "$target_user" -- "$@"
-            else
-                su -s /bin/bash "$target_user" -c "$(printf '%q ' "$@")"
+                return $?
             fi
-            return $?
+            log_error "runuser is required for '-u' execution when sudo is unavailable."
+            return 1
         fi
         "$@"
-    else
-        command sudo "$@"
-    fi
-}
+    }
+fi
 
 # --- Cleanup Handler ---
 declare -a CLEANUP_ACTIONS_ON_FAILURE # Stores commands or function calls for cleanup
@@ -706,7 +706,7 @@ install_nodejs() {
     fi
     if command -v npm &> /dev/null; then
         log_info "Installing global npm packages (system-wide)..."
-        sudo npm install -g --unsafe-perm yarn typescript ts-node nodemon pm2
+        sudo npm install -g yarn typescript ts-node nodemon pm2
         log_success "Installed global npm packages."
     else
         log_warning "npm not found. Skipping global npm packages."
