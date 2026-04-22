@@ -773,22 +773,25 @@ install_miniconda() {
     if [ ! -d "$CONDA_DIR/bin" ]; then
         local miniconda_tmp_dir
         miniconda_tmp_dir=$(mktemp -d)
+        # Ensure the temp dir is cleaned up on error
+        add_cleanup_action_on_failure "rm -rf '$miniconda_tmp_dir'"
         local miniconda_arch
         miniconda_arch=$(uname -m)
         local installer="$miniconda_tmp_dir/miniconda_installer.sh"
+        local hashes_file="$miniconda_tmp_dir/hashes.txt"
         wget "https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-${miniconda_arch}.sh" -O "$installer"
-        # Verify the installer against Anaconda's published SHA256 hash
-        local expected_sha256
-        expected_sha256=$(wget -qO- "https://repo.anaconda.com/miniconda/" \
-            | grep -oP "Miniconda3-latest-Linux-${miniconda_arch}\.sh[^<]*<td>[^<]*</td>[^<]*<td>\K[0-9a-f]{64}" \
-            | head -1 || true)
-        if [ -n "$expected_sha256" ]; then
-            echo "$expected_sha256  $installer" | sha256sum -c - || {
-                log_error "Miniconda installer checksum verification failed. Aborting."
-                rm -rf "$miniconda_tmp_dir"
-                return 1
-            }
-            log_info "Miniconda installer checksum verified."
+        # Verify the installer using Anaconda's official hashes text file
+        if wget -qO "$hashes_file" "https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-${miniconda_arch}.sh.sha256" 2>/dev/null; then
+            local expected_sha256
+            expected_sha256=$(awk '{print $1}' "$hashes_file")
+            if [ -n "$expected_sha256" ]; then
+                echo "$expected_sha256  $installer" | sha256sum -c - || {
+                    log_error "Miniconda installer checksum verification failed. Aborting."
+                    rm -rf "$miniconda_tmp_dir"
+                    return 1
+                }
+                log_info "Miniconda installer checksum verified."
+            fi
         else
             log_warning "Could not fetch expected checksum; skipping verification."
         fi
@@ -815,7 +818,7 @@ EOF
     [ -f "$CONDA_DIR/etc/profile.d/conda.sh" ] && . "$CONDA_DIR/etc/profile.d/conda.sh"
     if command -v conda &> /dev/null; then
         # Disable auto-activate for all users (system-wide .condarc)
-        sudo "$CONDA_DIR/bin/conda" config --system --set auto_activate_base false
+        "$CONDA_DIR/bin/conda" config --system --set auto_activate_base false
         log_success "Configured conda auto_activate_base=false (system-wide)."
     else
         log_warning "Conda command not found after install."
