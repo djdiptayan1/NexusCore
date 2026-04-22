@@ -771,13 +771,29 @@ install_miniconda() {
     # Install to /opt/miniconda3 so all users share the same Conda installation
     CONDA_DIR="/opt/miniconda3"
     if [ ! -d "$CONDA_DIR/bin" ]; then
-        local miniconda_tmp_dir="/tmp/miniconda_tmp"
-        sudo mkdir -p "$miniconda_tmp_dir"
+        local miniconda_tmp_dir
+        miniconda_tmp_dir=$(mktemp -d)
         local miniconda_arch
         miniconda_arch=$(uname -m)
-        wget "https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-${miniconda_arch}.sh" -O "$miniconda_tmp_dir/miniconda_installer.sh"
-        sudo bash "$miniconda_tmp_dir/miniconda_installer.sh" -b -u -p "$CONDA_DIR"
-        sudo rm -rf "$miniconda_tmp_dir"
+        local installer="$miniconda_tmp_dir/miniconda_installer.sh"
+        wget "https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-${miniconda_arch}.sh" -O "$installer"
+        # Verify the installer against Anaconda's published SHA256 hash
+        local expected_sha256
+        expected_sha256=$(wget -qO- "https://repo.anaconda.com/miniconda/" \
+            | grep -oP "Miniconda3-latest-Linux-${miniconda_arch}\.sh[^<]*<td>[^<]*</td>[^<]*<td>\K[0-9a-f]{64}" \
+            | head -1 || true)
+        if [ -n "$expected_sha256" ]; then
+            echo "$expected_sha256  $installer" | sha256sum -c - || {
+                log_error "Miniconda installer checksum verification failed. Aborting."
+                rm -rf "$miniconda_tmp_dir"
+                return 1
+            }
+            log_info "Miniconda installer checksum verified."
+        else
+            log_warning "Could not fetch expected checksum; skipping verification."
+        fi
+        sudo bash "$installer" -b -u -p "$CONDA_DIR"
+        rm -rf "$miniconda_tmp_dir"
         log_success "Miniconda installed to $CONDA_DIR."
     else
         log_info "Miniconda already installed at $CONDA_DIR."
