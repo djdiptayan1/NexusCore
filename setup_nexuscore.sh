@@ -682,9 +682,11 @@ install_go() {
     sudo rm -rf /usr/local/go
     sudo tar -C /usr/local -xzf "$go_tmp_path"
     rm -f "$go_tmp_path"
-    if ! grep -q '/usr/local/go/bin' "$HOME/.bashrc"; then
-        backup_file "$HOME/.bashrc" "$USER"
-        echo 'export PATH=$PATH:/usr/local/go/bin' >> "$HOME/.bashrc"
+    # Add Go to the system-wide PATH so every user gets it automatically
+    local go_profile="/etc/profile.d/go.sh"
+    if [ ! -f "$go_profile" ] || ! grep -q '/usr/local/go/bin' "$go_profile"; then
+        echo 'export PATH=$PATH:/usr/local/go/bin' | sudo tee "$go_profile" > /dev/null
+        sudo chmod 644 "$go_profile"
     fi
     export PATH=$PATH:/usr/local/go/bin
     if command -v go &> /dev/null; then
@@ -766,32 +768,39 @@ install_docker() {
 }
 
 install_miniconda() {
-    CONDA_DIR="$HOME/miniconda3"
-    backup_file "$HOME/.bashrc" "$USER"
-    if [ -f "$HOME/.zshrc" ]; then
-        backup_file "$HOME/.zshrc" "$USER"
-    fi
+    # Install to /opt/miniconda3 so all users share the same Conda installation
+    CONDA_DIR="/opt/miniconda3"
     if [ ! -d "$CONDA_DIR/bin" ]; then
-        local miniconda_tmp_dir="$HOME/miniconda_tmp"
-        mkdir -p "$miniconda_tmp_dir"
+        local miniconda_tmp_dir="/tmp/miniconda_tmp"
+        sudo mkdir -p "$miniconda_tmp_dir"
         local miniconda_arch
         miniconda_arch=$(uname -m)
         wget "https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-${miniconda_arch}.sh" -O "$miniconda_tmp_dir/miniconda_installer.sh"
-        bash "$miniconda_tmp_dir/miniconda_installer.sh" -b -u -p "$CONDA_DIR"
-        rm -rf "$miniconda_tmp_dir"
-        eval "$("$CONDA_DIR/bin/conda" 'shell.bash' 'hook')"
-        "$CONDA_DIR/bin/conda" init bash
-        if [ -f "$HOME/.zshrc" ]; then
-            "$CONDA_DIR/bin/conda" init zsh
-        fi
+        sudo bash "$miniconda_tmp_dir/miniconda_installer.sh" -b -u -p "$CONDA_DIR"
+        sudo rm -rf "$miniconda_tmp_dir"
         log_success "Miniconda installed to $CONDA_DIR."
     else
-        log_info "Miniconda already installed. Sourcing."
-        eval "$("$CONDA_DIR/bin/conda" 'shell.bash' 'hook')"
+        log_info "Miniconda already installed at $CONDA_DIR."
     fi
+    # Make conda available to all users via /etc/profile.d/
+    local conda_profile="/etc/profile.d/conda.sh"
+    if [ ! -f "$conda_profile" ]; then
+        sudo tee "$conda_profile" > /dev/null << 'EOF'
+# Conda system-wide initialisation (added by NexusCore)
+# shellcheck disable=SC1091
+if [ -f "/opt/miniconda3/etc/profile.d/conda.sh" ]; then
+    . "/opt/miniconda3/etc/profile.d/conda.sh"
+fi
+EOF
+        sudo chmod 644 "$conda_profile"
+    fi
+    # Activate for the current shell session so the following conda call works
+    # shellcheck disable=SC1091
+    [ -f "$CONDA_DIR/etc/profile.d/conda.sh" ] && . "$CONDA_DIR/etc/profile.d/conda.sh"
     if command -v conda &> /dev/null; then
-        conda config --set auto_activate_base false
-        log_success "Configured conda auto_activate_base=false."
+        # Disable auto-activate for all users (system-wide .condarc)
+        sudo "$CONDA_DIR/bin/conda" config --system --set auto_activate_base false
+        log_success "Configured conda auto_activate_base=false (system-wide)."
     else
         log_warning "Conda command not found after install."
     fi
@@ -904,16 +913,16 @@ install_unattended_upgrades() {
 }
 
 collect_system_logs() {
-    LOGS_DIR="$HOME/system_logs"
-    mkdir -p "$LOGS_DIR"
-    date > "$LOGS_DIR/setup_complete_date.log"
-    uname -a > "$LOGS_DIR/system_info.log"
-    cat /proc/cpuinfo > "$LOGS_DIR/cpu_info.log" 2>/dev/null
-    free -h > "$LOGS_DIR/memory_info.log"
-    df -h > "$LOGS_DIR/disk_info.log"
-    ip addr > "$LOGS_DIR/network_info.log" 2>/dev/null
+    LOGS_DIR="/var/log/nexuscore"
+    sudo mkdir -p "$LOGS_DIR"
+    date | sudo tee "$LOGS_DIR/setup_complete_date.log" > /dev/null
+    uname -a | sudo tee "$LOGS_DIR/system_info.log" > /dev/null
+    cat /proc/cpuinfo 2>/dev/null | sudo tee "$LOGS_DIR/cpu_info.log" > /dev/null
+    free -h | sudo tee "$LOGS_DIR/memory_info.log" > /dev/null
+    df -h | sudo tee "$LOGS_DIR/disk_info.log" > /dev/null
+    ip addr 2>/dev/null | sudo tee "$LOGS_DIR/network_info.log" > /dev/null
     if command -v docker &> /dev/null; then
-        docker info > "$LOGS_DIR/docker_info.log" 2>/dev/null || true
+        docker info 2>/dev/null | sudo tee "$LOGS_DIR/docker_info.log" > /dev/null || true
     fi
     {
         echo "NexusCore Setup - $(date)"
@@ -937,7 +946,7 @@ collect_system_logs() {
         echo "Succeeded: ${SUCCEEDED_COMPONENTS[*]:-none}"
         echo "Failed: ${FAILED_COMPONENTS[*]:-none}"
         echo "Skipped: ${SKIPPED_COMPONENTS[*]:-none}"
-    } > "$LOGS_DIR/nexuscore_config.log"
+    } | sudo tee "$LOGS_DIR/nexuscore_config.log" > /dev/null
     log_success "System logs saved to $LOGS_DIR"
 }
 
@@ -1136,7 +1145,7 @@ main_entry_point() {
         if [ "$INSTALL_NGINX" = true ]; then
             echo -e "\033[1;33m${step}. Nginx is running:\033[0m http://$(hostname -I | awk '{print $1}')"; ((step++))
         fi
-        echo -e "\033[1;33m${step}. View system logs:\033[0m ls ~/system_logs/"; ((step++))
+        echo -e "\033[1;33m${step}. View system logs:\033[0m ls /var/log/nexuscore/"; ((step++))
 
         echo
         if [ ${#FAILED_COMPONENTS[@]} -gt 0 ]; then

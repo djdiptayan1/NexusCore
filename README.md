@@ -60,7 +60,7 @@ NexusCore is a complete server setup script for multiple Linux distributions. It
   - Go (Golang)
   - C/C++ toolchain (gcc, g++, gdb, clang)
   - Node.js + npm as system-wide packages
-- ✅ Miniconda for Python environment management
+- ✅ Miniconda installed system-wide to /opt/miniconda3, activated for all users via /etc/profile.d/
 - ✅ Docker and Docker Compose
 
 ### Server Software
@@ -131,7 +131,7 @@ NexusCore is a complete server setup script for multiple Linux distributions. It
 | | Node.js | System-wide Node.js + npm + yarn, typescript, nodemon, pm2 |
 | | C/C++ | gcc, g++, gdb, clang, valgrind |
 | | Docker | Docker Engine + Docker Compose plugin |
-| | Miniconda | Python environment management |
+| | Miniconda | Python environment management — installed system-wide to /opt/miniconda3 |
 | **Software** | Nginx | Nginx web server |
 | | Cloudflared | Cloudflare Tunnel client |
 | | Monitoring | glances, bpytop, nload, lm-sensors |
