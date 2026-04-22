@@ -1,16 +1,19 @@
 # NexusCore Setup Script v3.3 — Multi-Distribution Linux Support
 # Supported: Ubuntu, Pop!_OS, Zorin OS (Debian-based) and Fedora (RPM-based)
-# Resilient single-user setup with interactive prompts
+# Resilient setup with interactive prompts for root or sudo-enabled users
 # Components are isolated — a failure in one does not stop the rest
 
 # treat unset variables as an error, and ensure pipelines fail on error.
 set -uo pipefail
 
 # --- Configuration (defaults, overridden by interactive prompts) ---
-ADMIN_USER="$USER"
+if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+    ADMIN_USER="$SUDO_USER"
+else
+    ADMIN_USER="$USER"
+fi
 JAVA_VERSION=""   # Auto-detected: latest LTS from package manager
 GO_VERSION=""     # Auto-detected: latest stable from go.dev
-NVM_VERSION=""    # Auto-detected: latest release from GitHub
 INSTALL_DOCKER=false
 INSTALL_PYTHON=false
 INSTALL_MINICONDA=false
@@ -35,6 +38,41 @@ ENABLE_PASSWORD_AUTH=true
 DISTRO_FAMILY=""   # "debian" or "fedora"
 DISTRO_ID=""       # e.g., "ubuntu", "pop", "zorin", "fedora"
 DISTRO_VERSION=""  # e.g., "24.04", "22.04", "40"
+RUNNING_AS_ROOT=false
+HAS_NATIVE_SUDO=false
+
+if [ "$(id -u)" -eq 0 ]; then
+    RUNNING_AS_ROOT=true
+fi
+
+if command -v sudo >/dev/null 2>&1; then
+    HAS_NATIVE_SUDO=true
+fi
+
+# Root-compatible sudo shim for systems where root is used and sudo is absent.
+if [ "$RUNNING_AS_ROOT" = true ] && [ "$HAS_NATIVE_SUDO" != true ]; then
+    sudo() {
+        if [ "${1:-}" = "-u" ]; then
+            if [ -z "${2:-}" ]; then
+                log_error "Invalid sudo usage: '-u' requires a target user."
+                return 1
+            fi
+            local target_user="$2"
+            shift 2
+            if [ "$target_user" = "$(id -un)" ]; then
+                "$@"
+                return $?
+            fi
+            if command -v runuser >/dev/null 2>&1; then
+                runuser -u "$target_user" -- "$@"
+                return $?
+            fi
+            log_error "runuser is required for '-u' execution when sudo is unavailable."
+            return 1
+        fi
+        "$@"
+    }
+fi
 
 # --- Cleanup Handler ---
 declare -a CLEANUP_ACTIONS_ON_FAILURE # Stores commands or function calls for cleanup
@@ -263,18 +301,6 @@ detect_go_version() {
     echo "1.24.1"  # Fallback to a known stable version
 }
 
-# Detect latest NVM version from GitHub
-detect_nvm_version() {
-    local version
-    version=$(curl -fsSL --connect-timeout 5 'https://api.github.com/repos/nvm-sh/nvm/releases/latest' 2>/dev/null \
-        | grep -oP '"tag_name":\s*"\K[^"]+')
-    if [ -n "$version" ]; then
-        echo "$version"
-        return 0
-    fi
-    echo "v0.40.1"  # Fallback to a known stable version
-}
-
 # Resolve all auto-detected versions (called after package lists are updated)
 resolve_tool_versions() {
     if [ -z "$JAVA_VERSION" ] && [ "$INSTALL_JAVA" = true ]; then
@@ -286,11 +312,6 @@ resolve_tool_versions() {
         log_info "Detecting latest Go stable version..."
         GO_VERSION=$(detect_go_version)
         log_info "Go version resolved: $GO_VERSION"
-    fi
-    if [ -z "$NVM_VERSION" ] && [ "$INSTALL_NODEJS" = true ]; then
-        log_info "Detecting latest NVM version..."
-        NVM_VERSION=$(detect_nvm_version)
-        log_info "NVM version resolved: $NVM_VERSION"
     fi
 }
 
@@ -402,7 +423,7 @@ interactive_setup() {
         INSTALL_GO=true
     fi
 
-    if ask_yes_no "  Install Node.js (via NVM)?"; then
+    if ask_yes_no "  Install Node.js (system-wide)?"; then
         INSTALL_NODEJS=true
     fi
 
@@ -661,9 +682,11 @@ install_go() {
     sudo rm -rf /usr/local/go
     sudo tar -C /usr/local -xzf "$go_tmp_path"
     rm -f "$go_tmp_path"
-    if ! grep -q '/usr/local/go/bin' "$HOME/.bashrc"; then
-        backup_file "$HOME/.bashrc" "$USER"
-        echo 'export PATH=$PATH:/usr/local/go/bin' >> "$HOME/.bashrc"
+    # Add Go to the system-wide PATH so every user gets it automatically
+    local go_profile="/etc/profile.d/go.sh"
+    if [ ! -f "$go_profile" ] || ! grep -q '/usr/local/go/bin' "$go_profile"; then
+        echo 'export PATH=$PATH:/usr/local/go/bin' | sudo tee "$go_profile" > /dev/null
+        sudo chmod 644 "$go_profile"
     fi
     export PATH=$PATH:/usr/local/go/bin
     if command -v go &> /dev/null; then
@@ -675,46 +698,17 @@ install_go() {
 }
 
 install_nodejs() {
-    export NVM_DIR="$HOME/.nvm"
-    backup_file "$HOME/.bashrc" "$USER"
-    if [ -f "$HOME/.zshrc" ]; then
-        backup_file "$HOME/.zshrc" "$USER"
-    fi
-    if [ ! -d "$NVM_DIR" ]; then
-        mkdir -p "$NVM_DIR"
-        curl -o- "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh" | bash
-        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-        [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
-        if command -v nvm &> /dev/null; then
-            set +u
-            nvm install --lts && nvm use --lts && nvm alias default 'lts/*'
-            set -u
-            log_success "Node.js LTS installed via NVM."
-        else
-            log_error "NVM command not found after install."
-            return 1
-        fi
+    log_info "Installing Node.js and npm as system packages..."
+    pkg_install nodejs npm
+    if command -v node &> /dev/null; then
+        log_success "Node.js $(node --version) installed system-wide."
     else
-        log_info "NVM already installed. Sourcing and ensuring LTS Node.js."
-        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-        set +u
-        if ! nvm ls 'lts/*' &> /dev/null || ! (nvm current | grep -qE 'lts|node'); then
-            nvm install --lts && nvm use --lts && nvm alias default 'lts/*'
-        elif ! (nvm current | grep -q 'lts'); then
-            nvm use 'lts/*' && nvm alias default 'lts/*'
-        fi
-        set -u
-        log_success "NVM sourced, Node.js LTS configured."
+        log_error "Node.js installation failed."
+        return 1
     fi
-    # Global npm packages
     if command -v npm &> /dev/null; then
-        log_info "Installing global npm packages..."
-        (
-          [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-          set +u
-          npm install -g yarn typescript ts-node nodemon pm2
-          set -u
-        )
+        log_info "Installing global npm packages (system-wide)..."
+        sudo npm install -g yarn typescript ts-node nodemon pm2
         log_success "Installed global npm packages."
     else
         log_warning "npm not found. Skipping global npm packages."
@@ -774,32 +768,58 @@ install_docker() {
 }
 
 install_miniconda() {
-    CONDA_DIR="$HOME/miniconda3"
-    backup_file "$HOME/.bashrc" "$USER"
-    if [ -f "$HOME/.zshrc" ]; then
-        backup_file "$HOME/.zshrc" "$USER"
-    fi
+    # Install to /opt/miniconda3 so all users share the same Conda installation
+    CONDA_DIR="/opt/miniconda3"
     if [ ! -d "$CONDA_DIR/bin" ]; then
-        local miniconda_tmp_dir="$HOME/miniconda_tmp"
-        mkdir -p "$miniconda_tmp_dir"
+        local miniconda_tmp_dir
+        miniconda_tmp_dir=$(mktemp -d)
+        # Ensure the temp dir is cleaned up on error
+        add_cleanup_action_on_failure "rm -rf '$miniconda_tmp_dir'"
         local miniconda_arch
         miniconda_arch=$(uname -m)
-        wget "https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-${miniconda_arch}.sh" -O "$miniconda_tmp_dir/miniconda_installer.sh"
-        bash "$miniconda_tmp_dir/miniconda_installer.sh" -b -u -p "$CONDA_DIR"
-        rm -rf "$miniconda_tmp_dir"
-        eval "$("$CONDA_DIR/bin/conda" 'shell.bash' 'hook')"
-        "$CONDA_DIR/bin/conda" init bash
-        if [ -f "$HOME/.zshrc" ]; then
-            "$CONDA_DIR/bin/conda" init zsh
+        local installer="$miniconda_tmp_dir/miniconda_installer.sh"
+        local hashes_file="$miniconda_tmp_dir/hashes.txt"
+        wget "https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-${miniconda_arch}.sh" -O "$installer"
+        # Verify the installer using Anaconda's official hashes text file
+        if wget -qO "$hashes_file" "https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-${miniconda_arch}.sh.sha256" 2>/dev/null; then
+            local expected_sha256
+            expected_sha256=$(awk '{print $1}' "$hashes_file")
+            if [ -n "$expected_sha256" ]; then
+                echo "$expected_sha256  $installer" | sha256sum -c - || {
+                    log_error "Miniconda installer checksum verification failed. Aborting."
+                    rm -rf "$miniconda_tmp_dir"
+                    return 1
+                }
+                log_info "Miniconda installer checksum verified."
+            fi
+        else
+            log_warning "Could not fetch expected checksum; skipping verification."
         fi
+        sudo bash "$installer" -b -u -p "$CONDA_DIR"
+        rm -rf "$miniconda_tmp_dir"
         log_success "Miniconda installed to $CONDA_DIR."
     else
-        log_info "Miniconda already installed. Sourcing."
-        eval "$("$CONDA_DIR/bin/conda" 'shell.bash' 'hook')"
+        log_info "Miniconda already installed at $CONDA_DIR."
     fi
+    # Make conda available to all users via /etc/profile.d/
+    local conda_profile="/etc/profile.d/conda.sh"
+    if [ ! -f "$conda_profile" ]; then
+        sudo tee "$conda_profile" > /dev/null << 'EOF'
+# Conda system-wide initialisation (added by NexusCore)
+# shellcheck disable=SC1091
+if [ -f "/opt/miniconda3/etc/profile.d/conda.sh" ]; then
+    . "/opt/miniconda3/etc/profile.d/conda.sh"
+fi
+EOF
+        sudo chmod 644 "$conda_profile"
+    fi
+    # Activate for the current shell session so the following conda call works
+    # shellcheck disable=SC1091
+    [ -f "$CONDA_DIR/etc/profile.d/conda.sh" ] && . "$CONDA_DIR/etc/profile.d/conda.sh"
     if command -v conda &> /dev/null; then
-        conda config --set auto_activate_base false
-        log_success "Configured conda auto_activate_base=false."
+        # Disable auto-activate for all users (system-wide .condarc)
+        "$CONDA_DIR/bin/conda" config --system --set auto_activate_base false
+        log_success "Configured conda auto_activate_base=false (system-wide)."
     else
         log_warning "Conda command not found after install."
     fi
@@ -912,16 +932,16 @@ install_unattended_upgrades() {
 }
 
 collect_system_logs() {
-    LOGS_DIR="$HOME/system_logs"
-    mkdir -p "$LOGS_DIR"
-    date > "$LOGS_DIR/setup_complete_date.log"
-    uname -a > "$LOGS_DIR/system_info.log"
-    cat /proc/cpuinfo > "$LOGS_DIR/cpu_info.log" 2>/dev/null
-    free -h > "$LOGS_DIR/memory_info.log"
-    df -h > "$LOGS_DIR/disk_info.log"
-    ip addr > "$LOGS_DIR/network_info.log" 2>/dev/null
+    LOGS_DIR="/var/log/nexuscore"
+    sudo mkdir -p "$LOGS_DIR"
+    date | sudo tee "$LOGS_DIR/setup_complete_date.log" > /dev/null
+    uname -a | sudo tee "$LOGS_DIR/system_info.log" > /dev/null
+    cat /proc/cpuinfo 2>/dev/null | sudo tee "$LOGS_DIR/cpu_info.log" > /dev/null
+    free -h | sudo tee "$LOGS_DIR/memory_info.log" > /dev/null
+    df -h | sudo tee "$LOGS_DIR/disk_info.log" > /dev/null
+    ip addr 2>/dev/null | sudo tee "$LOGS_DIR/network_info.log" > /dev/null
     if command -v docker &> /dev/null; then
-        docker info > "$LOGS_DIR/docker_info.log" 2>/dev/null || true
+        docker info 2>/dev/null | sudo tee "$LOGS_DIR/docker_info.log" > /dev/null || true
     fi
     {
         echo "NexusCore Setup - $(date)"
@@ -945,7 +965,7 @@ collect_system_logs() {
         echo "Succeeded: ${SUCCEEDED_COMPONENTS[*]:-none}"
         echo "Failed: ${FAILED_COMPONENTS[*]:-none}"
         echo "Skipped: ${SKIPPED_COMPONENTS[*]:-none}"
-    } > "$LOGS_DIR/nexuscore_config.log"
+    } | sudo tee "$LOGS_DIR/nexuscore_config.log" > /dev/null
     log_success "System logs saved to $LOGS_DIR"
 }
 
@@ -961,12 +981,16 @@ run_main_operations() {
     check_os_compatibility
 
     log_info "Starting NexusCore Server Setup v3.3 for user: $ADMIN_USER"
-    if [ "$(id -u)" = "0" ]; then
-       log_error "This script should not be run as root. Run as a sudo-enabled user."
-       exit 1
+    if [ "$RUNNING_AS_ROOT" = true ]; then
+        log_info "Running as root. Administrative commands will run directly."
+    else
+        if [ "$HAS_NATIVE_SUDO" != true ]; then
+            log_error "sudo is required when running as a non-root user."
+            exit 1
+        fi
     fi
 
-    if ! sudo -n true 2>/dev/null; then
+    if [ "$RUNNING_AS_ROOT" != true ] && ! sudo -n true 2>/dev/null; then
         log_warning "Sudo access for $USER requires a password. You may be prompted multiple times."
     fi
 
@@ -1140,7 +1164,7 @@ main_entry_point() {
         if [ "$INSTALL_NGINX" = true ]; then
             echo -e "\033[1;33m${step}. Nginx is running:\033[0m http://$(hostname -I | awk '{print $1}')"; ((step++))
         fi
-        echo -e "\033[1;33m${step}. View system logs:\033[0m ls ~/system_logs/"; ((step++))
+        echo -e "\033[1;33m${step}. View system logs:\033[0m ls /var/log/nexuscore/"; ((step++))
 
         echo
         if [ ${#FAILED_COMPONENTS[@]} -gt 0 ]; then
