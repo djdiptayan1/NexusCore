@@ -33,7 +33,7 @@ NexusCore is a complete server setup script for multiple Linux distributions. It
 
 ### Interactive Setup
 - ✅ Choose what to install at runtime via simple yes/no prompts
-- ✅ Single-user focused setup (uses current user)
+- ✅ Works with root or sudo-enabled users
 - ✅ Organized prompts in categories: Server Config, Development Tools, Server Software
 - ✅ Summary confirmation before proceeding
 
@@ -59,7 +59,7 @@ NexusCore is a complete server setup script for multiple Linux distributions. It
   - OpenJDK (latest LTS — auto-detected)
   - Go (Golang)
   - C/C++ toolchain (gcc, g++, gdb, clang)
-  - Node.js LTS via NVM (Node Version Manager)
+  - Node.js + npm as system-wide packages
 - ✅ Miniconda for Python environment management
 - ✅ Docker and Docker Compose
 
@@ -84,7 +84,7 @@ NexusCore is a complete server setup script for multiple Linux distributions. It
 
 ### Prerequisites
 - A supported Linux distribution: Ubuntu (24.04 LTS recommended), Pop!_OS, Zorin OS, or Fedora
-- A user account with sudo privileges
+- Root access or a user account with sudo privileges
 
 ### Installation
 
@@ -128,7 +128,7 @@ NexusCore is a complete server setup script for multiple Linux distributions. It
 | **Dev** | Python | Python 3, pip, venv, dev headers |
 | | Java | OpenJDK (latest LTS — auto-detected from package manager) |
 | | Go | Latest stable (auto-detected from go.dev) |
-| | Node.js | NVM + LTS Node.js + yarn, typescript, nodemon, pm2 |
+| | Node.js | System-wide Node.js + npm + yarn, typescript, nodemon, pm2 |
 | | C/C++ | gcc, g++, gdb, clang, valgrind |
 | | Docker | Docker Engine + Docker Compose plugin |
 | | Miniconda | Python environment management |

@@ -1,16 +1,19 @@
 # NexusCore Setup Script v3.3 — Multi-Distribution Linux Support
 # Supported: Ubuntu, Pop!_OS, Zorin OS (Debian-based) and Fedora (RPM-based)
-# Resilient single-user setup with interactive prompts
+# Resilient setup with interactive prompts for root or sudo-enabled users
 # Components are isolated — a failure in one does not stop the rest
 
 # treat unset variables as an error, and ensure pipelines fail on error.
 set -uo pipefail
 
 # --- Configuration (defaults, overridden by interactive prompts) ---
-ADMIN_USER="$USER"
+if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+    ADMIN_USER="$SUDO_USER"
+else
+    ADMIN_USER="$USER"
+fi
 JAVA_VERSION=""   # Auto-detected: latest LTS from package manager
 GO_VERSION=""     # Auto-detected: latest stable from go.dev
-NVM_VERSION=""    # Auto-detected: latest release from GitHub
 INSTALL_DOCKER=false
 INSTALL_PYTHON=false
 INSTALL_MINICONDA=false
@@ -35,6 +38,30 @@ ENABLE_PASSWORD_AUTH=true
 DISTRO_FAMILY=""   # "debian" or "fedora"
 DISTRO_ID=""       # e.g., "ubuntu", "pop", "zorin", "fedora"
 DISTRO_VERSION=""  # e.g., "24.04", "22.04", "40"
+RUNNING_AS_ROOT=false
+HAS_NATIVE_SUDO=false
+
+if [ "$(id -u)" -eq 0 ]; then
+    RUNNING_AS_ROOT=true
+fi
+
+if command -v sudo >/dev/null 2>&1; then
+    HAS_NATIVE_SUDO=true
+fi
+
+# Root-compatible sudo wrapper:
+# - Non-root: delegate to native sudo
+# - Root: run commands directly, including "sudo -u user" calls used by this script
+sudo() {
+    if [ "$RUNNING_AS_ROOT" = true ]; then
+        if [ "${1:-}" = "-u" ]; then
+            shift 2
+        fi
+        "$@"
+    else
+        command sudo "$@"
+    fi
+}
 
 # --- Cleanup Handler ---
 declare -a CLEANUP_ACTIONS_ON_FAILURE # Stores commands or function calls for cleanup
@@ -263,18 +290,6 @@ detect_go_version() {
     echo "1.24.1"  # Fallback to a known stable version
 }
 
-# Detect latest NVM version from GitHub
-detect_nvm_version() {
-    local version
-    version=$(curl -fsSL --connect-timeout 5 'https://api.github.com/repos/nvm-sh/nvm/releases/latest' 2>/dev/null \
-        | grep -oP '"tag_name":\s*"\K[^"]+')
-    if [ -n "$version" ]; then
-        echo "$version"
-        return 0
-    fi
-    echo "v0.40.1"  # Fallback to a known stable version
-}
-
 # Resolve all auto-detected versions (called after package lists are updated)
 resolve_tool_versions() {
     if [ -z "$JAVA_VERSION" ] && [ "$INSTALL_JAVA" = true ]; then
@@ -286,11 +301,6 @@ resolve_tool_versions() {
         log_info "Detecting latest Go stable version..."
         GO_VERSION=$(detect_go_version)
         log_info "Go version resolved: $GO_VERSION"
-    fi
-    if [ -z "$NVM_VERSION" ] && [ "$INSTALL_NODEJS" = true ]; then
-        log_info "Detecting latest NVM version..."
-        NVM_VERSION=$(detect_nvm_version)
-        log_info "NVM version resolved: $NVM_VERSION"
     fi
 }
 
@@ -402,7 +412,7 @@ interactive_setup() {
         INSTALL_GO=true
     fi
 
-    if ask_yes_no "  Install Node.js (via NVM)?"; then
+    if ask_yes_no "  Install Node.js (system-wide)?"; then
         INSTALL_NODEJS=true
     fi
 
@@ -675,46 +685,17 @@ install_go() {
 }
 
 install_nodejs() {
-    export NVM_DIR="$HOME/.nvm"
-    backup_file "$HOME/.bashrc" "$USER"
-    if [ -f "$HOME/.zshrc" ]; then
-        backup_file "$HOME/.zshrc" "$USER"
-    fi
-    if [ ! -d "$NVM_DIR" ]; then
-        mkdir -p "$NVM_DIR"
-        curl -o- "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh" | bash
-        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-        [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
-        if command -v nvm &> /dev/null; then
-            set +u
-            nvm install --lts && nvm use --lts && nvm alias default 'lts/*'
-            set -u
-            log_success "Node.js LTS installed via NVM."
-        else
-            log_error "NVM command not found after install."
-            return 1
-        fi
+    log_info "Installing Node.js and npm as system packages..."
+    pkg_install nodejs npm
+    if command -v node &> /dev/null; then
+        log_success "Node.js $(node --version) installed system-wide."
     else
-        log_info "NVM already installed. Sourcing and ensuring LTS Node.js."
-        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-        set +u
-        if ! nvm ls 'lts/*' &> /dev/null || ! (nvm current | grep -qE 'lts|node'); then
-            nvm install --lts && nvm use --lts && nvm alias default 'lts/*'
-        elif ! (nvm current | grep -q 'lts'); then
-            nvm use 'lts/*' && nvm alias default 'lts/*'
-        fi
-        set -u
-        log_success "NVM sourced, Node.js LTS configured."
+        log_error "Node.js installation failed."
+        return 1
     fi
-    # Global npm packages
     if command -v npm &> /dev/null; then
-        log_info "Installing global npm packages..."
-        (
-          [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-          set +u
-          npm install -g yarn typescript ts-node nodemon pm2
-          set -u
-        )
+        log_info "Installing global npm packages (system-wide)..."
+        sudo npm install -g yarn typescript ts-node nodemon pm2
         log_success "Installed global npm packages."
     else
         log_warning "npm not found. Skipping global npm packages."
@@ -961,12 +942,16 @@ run_main_operations() {
     check_os_compatibility
 
     log_info "Starting NexusCore Server Setup v3.3 for user: $ADMIN_USER"
-    if [ "$(id -u)" = "0" ]; then
-       log_error "This script should not be run as root. Run as a sudo-enabled user."
-       exit 1
+    if [ "$RUNNING_AS_ROOT" = true ]; then
+        log_info "Running as root. Administrative commands will run directly."
+    else
+        if [ "$HAS_NATIVE_SUDO" != true ]; then
+            log_error "sudo is required when running as a non-root user."
+            exit 1
+        fi
     fi
 
-    if ! sudo -n true 2>/dev/null; then
+    if [ "$RUNNING_AS_ROOT" != true ] && ! sudo -n true 2>/dev/null; then
         log_warning "Sudo access for $USER requires a password. You may be prompted multiple times."
     fi
 
