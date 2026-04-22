@@ -240,91 +240,136 @@ restart_service_enhanced() {
     echo -e "${GRAY}════════════════════════════════════════════════════════${RESET}\n"
 }
 
+display_installed_packages() {
+    local packages=(
+        "bash" "systemd" "curl" "wget" "git" "vim" "nano" "tmux"
+        "htop" "btop" "python3" "python3-pip" "nodejs" "npm"
+        "docker" "docker-ce" "nginx" "cloudflared" "fail2ban" "ufw" "firewalld"
+    )
+    local found_any=false
+
+    echo -e "${CYAN}Installed package versions:${RESET}"
+
+    if command -v dpkg-query >/dev/null 2>&1; then
+        for pkg in "${packages[@]}"; do
+            local version
+            version=$(dpkg-query -W -f='${Version}' "$pkg" 2>/dev/null || true)
+            if [ -n "$version" ]; then
+                printf "  %-20s %s\n" "$pkg" "$version"
+                found_any=true
+            fi
+        done
+    elif command -v rpm >/dev/null 2>&1; then
+        for pkg in "${packages[@]}"; do
+            local version
+            version=$(rpm -q --qf '%{VERSION}-%{RELEASE}' "$pkg" 2>/dev/null || true)
+            if [ -n "$version" ] && [ "$version" != "package $pkg is not installed" ]; then
+                printf "  %-20s %s\n" "$pkg" "$version"
+                found_any=true
+            fi
+        done
+    else
+        echo -e "${YELLOW}  No supported package query tool found (dpkg/rpm).${RESET}"
+        return
+    fi
+
+    if [ "$found_any" = false ]; then
+        echo -e "${YELLOW}  None of the tracked packages were detected on this system.${RESET}"
+    fi
+}
+
 # --- Main Script Enhancements ---
 
 clear
-print_header "NEXUS CORE v2.0 - ADVANCED SERVICE ORCHESTRATOR"
-echo -e "${NEON_GREEN}${BOLD}► Quantum-encrypted connection established${RESET}"
-echo -e "${CYAN}► Operator authenticated: ${YELLOW}${BOLD}$(whoami)${RESET}"
-echo -e "${CYAN}► Security clearance: ${GREEN}${BOLD}OMEGA LEVEL${RESET}"
+print_header "NEXUS CORE v2.0 - SYSTEM INIT"
+echo -e "${CYAN}► User: ${YELLOW}${BOLD}$(whoami)${RESET}"
 echo -e "${GRAY}► Timestamp: $(date '+%Y-%m-%d %H:%M:%S %Z')${RESET}\n"
 
-# System Diagnostics (keeping your existing code but with enhanced display)
-print_subheader "QUANTUM SYSTEM DIAGNOSTICS"
+# System diagnostics
+print_subheader "SYSTEM DIAGNOSTICS"
 HOSTNAME_INFO=$(hostname)
 OS_INFO=$(lsb_release -ds 2>/dev/null || cat /etc/os-release 2>/dev/null | grep PRETTY_NAME | cut -d'"' -f2 || echo "N/A")
 KERNEL_INFO=$(uname -r)
 UPTIME_INFO=$(uptime -p)
 IP_ADDRESS_INFO=$(ip route get 1.1.1.1 | awk '{print $7; exit}' 2>/dev/null || echo "N/A")
+ARCH_INFO=$(uname -m)
+CPU_MODEL=$(awk -F': ' '/model name/ {print $2; exit}' /proc/cpuinfo 2>/dev/null || echo "N/A")
+CPU_CORES=$(nproc 2>/dev/null || echo "N/A")
 
 echo -e "${CYAN}┌─ System Identity ─────────────────────────────────────────┐${RESET}"
-echo -e "${CYAN}│${RESET} Codename        : ${YELLOW}${BOLD}NEXUSCORE${RESET}$(printf "%*s" 26 "")${CYAN}│${RESET}"
 echo -e "${CYAN}│${RESET} Hostname        : ${WHITE}$HOSTNAME_INFO${RESET}$(printf "%*s" $((40-${#HOSTNAME_INFO})) "")${CYAN}│${RESET}"
 echo -e "${CYAN}│${RESET} OS              : ${WHITE}$OS_INFO${RESET}$(printf "%*s" $((40-${#OS_INFO})) "")${CYAN}│${RESET}"
 echo -e "${CYAN}│${RESET} Kernel          : ${WHITE}$KERNEL_INFO${RESET}$(printf "%*s" $((40-${#KERNEL_INFO})) "")${CYAN}│${RESET}"
+echo -e "${CYAN}│${RESET} Architecture    : ${WHITE}$ARCH_INFO${RESET}$(printf "%*s" $((40-${#ARCH_INFO})) "")${CYAN}│${RESET}"
+echo -e "${CYAN}│${RESET} CPU Model       : ${WHITE}$CPU_MODEL${RESET}$(printf "%*s" $((40-${#CPU_MODEL})) "")${CYAN}│${RESET}"
+echo -e "${CYAN}│${RESET} CPU Cores       : ${WHITE}$CPU_CORES${RESET}$(printf "%*s" $((40-${#CPU_CORES})) "")${CYAN}│${RESET}"
 echo -e "${CYAN}│${RESET} Uptime          : ${GREEN}$UPTIME_INFO${RESET}$(printf "%*s" $((40-${#UPTIME_INFO})) "")${CYAN}│${RESET}"
 echo -e "${CYAN}│${RESET} Primary IP      : ${GREEN}$IP_ADDRESS_INFO${RESET}$(printf "%*s" $((40-${#IP_ADDRESS_INFO})) "")${CYAN}│${RESET}"
 echo -e "${CYAN}└───────────────────────────────────────────────────────────┘${RESET}"
 
 echo
 
-# Enhanced Software Update Check
-print_subheader "QUANTUM SOFTWARE UPDATE MATRIX"
+# Software update check
+print_subheader "PACKAGE STATUS"
 if command -v apt &> /dev/null; then
-    progress_bar 3 "Synchronizing quantum package databases"
+    progress_bar 3 "Synchronizing package database"
     sudo apt update -qq >/dev/null 2>&1 
     
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}✓ Package database synchronized${RESET}"
+        echo -e "${CYAN}Package manager: apt${RESET}"
         
-        progress_bar 2 "Scanning multiverse for available upgrades"
+        progress_bar 2 "Checking for available upgrades"
         UPGRADABLE_PACKAGES=$(apt list --upgradable 2>/dev/null | grep -v "Listing...")
         
         if [ -z "$UPGRADABLE_PACKAGES" ]; then
-            echo -e "${NEON_GREEN}${BOLD}🎯 SYSTEM STATUS: OPTIMAL${RESET}"
-            echo -e "${GREEN}► All packages are at their latest quantum state${RESET}"
+            echo -e "${GREEN}All installed packages are up to date.${RESET}"
         else
             NUM_UPGRADABLE=$(echo "$UPGRADABLE_PACKAGES" | wc -l)
-            echo -e "${YELLOW}${BOLD}⚡ UPGRADES DETECTED: ${NUM_UPGRADABLE} package(s)${RESET}"
-            echo -e "${CYAN}┌─ Pending Quantum Upgrades ────────────────────────────────┐${RESET}"
-            echo "$UPGRADABLE_PACKAGES" | head -10 | awk -F'/' '{printf "│ %-54s │\n", $1}' | sed "s/^/\${CYAN}/" | sed "s/$/\${RESET}/"
+            echo -e "${YELLOW}${BOLD}Upgrades available: ${NUM_UPGRADABLE} package(s)${RESET}"
+            echo -e "${CYAN}┌─ Upgradable Packages (Name | Candidate Version | Current Version) ──────────┐${RESET}"
+            echo "$UPGRADABLE_PACKAGES" | head -10 | awk -F'/' '{split($2,a," "); current=a[5]; gsub(/]/,"",current); printf "│ %-20s | %-24s | %-20s │\n", $1, a[2], current}' | sed "s/^/\${CYAN}/" | sed "s/$/\${RESET}/"
             if [ $NUM_UPGRADABLE -gt 10 ]; then
-                echo -e "${CYAN}│ ... and $((NUM_UPGRADABLE-10)) more packages$(printf "%*s" $((37-${#NUM_UPGRADABLE})) "") │${RESET}"
+                echo -e "${CYAN}│ ... and $((NUM_UPGRADABLE-10)) more packages$(printf "%*s" $((38-${#NUM_UPGRADABLE})) "") │${RESET}"
             fi
-            echo -e "${CYAN}└────────────────────────────────────────────────────────────┘${RESET}"
-            echo -e "${WHITE}► Execute upgrade: ${NEON_BLUE}${BOLD}sudo apt upgrade${RESET}"
+            echo -e "${CYAN}└──────────────────────────────────────────────────────────────────────────────┘${RESET}"
+            echo -e "${WHITE}Run: ${NEON_BLUE}${BOLD}sudo apt upgrade${RESET}"
         fi
     else
-        echo -e "${RED}✗ Quantum synchronization failed${RESET}"
+        echo -e "${RED}✗ Failed to synchronize package database${RESET}"
     fi
 elif command -v dnf &> /dev/null; then
-    progress_bar 3 "Synchronizing quantum package databases"
+    progress_bar 3 "Synchronizing package database"
     UPGRADABLE_PACKAGES=$(sudo dnf check-update 2>/dev/null | grep -E '^\S+\s+\S+\s+\S+' || true)
     
     echo -e "${GREEN}✓ Package database synchronized${RESET}"
+    echo -e "${CYAN}Package manager: dnf${RESET}"
     
     if [ -z "$UPGRADABLE_PACKAGES" ]; then
-        echo -e "${NEON_GREEN}${BOLD}🎯 SYSTEM STATUS: OPTIMAL${RESET}"
-        echo -e "${GREEN}► All packages are at their latest quantum state${RESET}"
+        echo -e "${GREEN}All installed packages are up to date.${RESET}"
     else
         NUM_UPGRADABLE=$(echo "$UPGRADABLE_PACKAGES" | wc -l)
-        echo -e "${YELLOW}${BOLD}⚡ UPGRADES DETECTED: ${NUM_UPGRADABLE} package(s)${RESET}"
-        echo -e "${CYAN}┌─ Pending Quantum Upgrades ────────────────────────────────┐${RESET}"
-        echo "$UPGRADABLE_PACKAGES" | head -10 | awk '{printf "│ %-54s │\n", $1}' | sed "s/^/\${CYAN}/" | sed "s/$/\${RESET}/"
+        echo -e "${YELLOW}${BOLD}Upgrades available: ${NUM_UPGRADABLE} package(s)${RESET}"
+        echo -e "${CYAN}┌─ Upgradable Packages (Name | Version) ─────────────────────────────────────┐${RESET}"
+        echo "$UPGRADABLE_PACKAGES" | head -10 | awk '{printf "│ %-30s | %-36s │\n", $1, $2}' | sed "s/^/\${CYAN}/" | sed "s/$/\${RESET}/"
         if [ $NUM_UPGRADABLE -gt 10 ]; then
-            echo -e "${CYAN}│ ... and $((NUM_UPGRADABLE-10)) more packages$(printf "%*s" $((37-${#NUM_UPGRADABLE})) "") │${RESET}"
+            echo -e "${CYAN}│ ... and $((NUM_UPGRADABLE-10)) more packages$(printf "%*s" $((38-${#NUM_UPGRADABLE})) "") │${RESET}"
         fi
-        echo -e "${CYAN}└────────────────────────────────────────────────────────────┘${RESET}"
-        echo -e "${WHITE}► Execute upgrade: ${NEON_BLUE}${BOLD}sudo dnf upgrade${RESET}"
+        echo -e "${CYAN}└──────────────────────────────────────────────────────────────────────────────┘${RESET}"
+        echo -e "${WHITE}Run: ${NEON_BLUE}${BOLD}sudo dnf upgrade${RESET}"
     fi
 else
     echo -e "${YELLOW}⚠ No supported package manager detected (apt/dnf)${RESET}"
 fi
 
 echo
+print_subheader "INSTALLED PACKAGE VERSIONS"
+display_installed_packages
+
+echo
 
 # Enhanced Service Restart Sequence
-print_subheader "NEXUS CORE SERVICE ORCHESTRATION"
+print_subheader "SERVICE ORCHESTRATION"
 
 if [ ${#SERVICES_TO_RESTART[@]} -eq 0 ]; then
     echo -e "${YELLOW}${BOLD}⚠ NO SERVICES CONFIGURED FOR QUANTUM RESTART${RESET}"
@@ -339,10 +384,10 @@ else
     done
     
     if [ ${#EXISTING_SERVICES[@]} -eq 0 ]; then
-        echo -e "${RED}${BOLD}❌ NO CONFIGURED SERVICES FOUND ON SYSTEM${RESET}"
+        echo -e "${RED}${BOLD}❌ No configured services found on this system${RESET}"
     else
         total_services=${#EXISTING_SERVICES[@]}
-        echo -e "${NEON_PINK}${BOLD}🎯 INITIATING QUANTUM SERVICE RESTART PROTOCOL${RESET}"
+        echo -e "${NEON_PINK}${BOLD}Starting service restart sequence${RESET}"
         echo -e "${CYAN}► Services to process: ${WHITE}${BOLD}$total_services${RESET}"
         echo -e "${CYAN}► Estimated completion: ${WHITE}${BOLD}$((total_services * 15)) seconds${RESET}\n"
         
@@ -361,9 +406,9 @@ else
 fi
 
 # Enhanced Final Status Report
-print_subheader "QUANTUM SYSTEM STATUS MATRIX"
+print_subheader "FINAL SYSTEM STATUS"
 
-echo -e "${NEON_BLUE}${BOLD}🔮 FINAL QUANTUM STATE ANALYSIS${RESET}\n"
+echo -e "${NEON_BLUE}${BOLD}Final system summary${RESET}\n"
 
 if [ ${#EXISTING_SERVICES[@]} -gt 0 ]; then
     ACTIVE_COUNT=0
@@ -394,14 +439,14 @@ FREE_MEM=$(free -m | awk '/^Mem:/{print $4}')
 TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
 DISK_SPACE=$(df -h / | awk 'NR==2{print $4 " / " $2 " (" $5 " used)"}')
 
-echo -e "\n${CYAN}┌─ Quantum System Metrics ───────────────────────────────────┐${RESET}"
+echo -e "\n${CYAN}┌─ System Metrics ───────────────────────────────────────────┐${RESET}"
 echo -e "${CYAN}│${RESET} Load Average        : ${WHITE}${LOAD_AVG}${RESET}$(printf "%*s" $((35-${#LOAD_AVG})) "")${CYAN}│${RESET}"
 echo -e "${CYAN}│${RESET} Memory (Free/Total) : ${WHITE}${FREE_MEM}MB / ${TOTAL_MEM}MB${RESET}$(printf "%*s" $((23-${#FREE_MEM}-${#TOTAL_MEM})) "")${CYAN}│${RESET}"
 echo -e "${CYAN}│${RESET} Disk Space (Root)   : ${WHITE}${DISK_SPACE}${RESET}$(printf "%*s" $((35-${#DISK_SPACE})) "")${CYAN}│${RESET}"
 echo -e "${CYAN}└─────────────────────────────────────────────────────────────┘${RESET}"
 
 echo
-print_header "NEXUS CORE v2.0: ALL QUANTUM SYSTEMS OPERATIONAL"
-echo -e "${NEON_GREEN}${BOLD}🚀 WELCOME BACK TO THE MATRIX, $(whoami | tr '[:lower:]' '[:upper:]')${RESET}"
-echo -e "${CYAN}${BOLD}► Ready to execute your commands, Boss.${RESET}"
+print_header "NEXUS CORE v2.0: INITIALIZATION COMPLETE"
+echo -e "${NEON_GREEN}${BOLD}System initialization completed.${RESET}"
+echo -e "${CYAN}${BOLD}Review the package and status sections above for details.${RESET}"
 echo
