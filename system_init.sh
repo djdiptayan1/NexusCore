@@ -43,7 +43,8 @@ NEON_BLUE='\033[38;5;39m'
 NEON_GREEN='\033[38;5;46m'
 NEON_PINK='\033[38;5;200m'
 ELECTRIC_BLUE='\033[38;5;27m'
-UPGRADE_TABLE_INNER_WIDTH=76
+APT_UPGRADE_TABLE_INNER_WIDTH=76
+DNF_UPGRADE_TABLE_INNER_WIDTH=76
 
 # --- Enhanced Helper Functions ---
 print_header() {
@@ -280,7 +281,8 @@ display_installed_packages() {
 
 print_remaining_packages_line() {
     local remaining="$1"
-    printf "${CYAN}│ %-${UPGRADE_TABLE_INNER_WIDTH}.${UPGRADE_TABLE_INNER_WIDTH}s │${RESET}\n" "... and ${remaining} more packages"
+    local inner_width="${2:-76}"
+    printf "${CYAN}│ %-${inner_width}.${inner_width}s │${RESET}\n" "... and ${remaining} more packages"
 }
 
 # --- Main Script Enhancements ---
@@ -330,26 +332,21 @@ if command -v apt &> /dev/null; then
         if [ -z "$UPGRADABLE_PACKAGES" ]; then
             echo -e "${GREEN}All installed packages are up to date.${RESET}"
         else
-            local apt_name_width=20
-            local apt_candidate_width=24
-            local apt_current_width=20
+            apt_name_width=20
+            apt_candidate_width=24
+            apt_current_width=20
             NUM_UPGRADABLE=$(echo "$UPGRADABLE_PACKAGES" | wc -l)
             echo -e "${YELLOW}${BOLD}Upgrades available: ${NUM_UPGRADABLE} package(s)${RESET}"
             echo -e "${CYAN}┌─ Upgradable Packages (Name | Candidate Version | Current Version) ──────────┐${RESET}"
-            echo "$UPGRADABLE_PACKAGES" | head -10 | awk -v name_w="$apt_name_width" -v cand_w="$apt_candidate_width" -v curr_w="$apt_current_width" '
-                match($0, /^([^/]+)\/[^ ]+ ([^ ]+) \[upgradable from: ([^]]+)\]$/, m) {
-                    printf "│ %-*.*s | %-*.*s | %-*.*s │\n", name_w, name_w, m[1], cand_w, cand_w, m[2], curr_w, curr_w, m[3]
-                    next
-                }
-                {
-                    split($1, package_parts, "/")
-                    package_name=package_parts[1]
-                    candidate_version=$2
-                    printf "│ %-*.*s | %-*.*s | %-*.*s │\n", name_w, name_w, package_name, cand_w, cand_w, candidate_version, curr_w, curr_w, "N/A"
-                }
-            ' | sed "s/^/\${CYAN}/" | sed "s/$/\${RESET}/"
+            echo "$UPGRADABLE_PACKAGES" | head -10 | cut -d'/' -f1 | while IFS= read -r package_name; do
+                [ -z "$package_name" ] && continue
+                candidate_version=$(apt-cache policy "$package_name" 2>/dev/null | awk '/Candidate:/ {print $2; exit}')
+                current_version=$(dpkg-query -W -f='${Version}' "$package_name" 2>/dev/null || echo "N/A")
+                [ -z "$candidate_version" ] && candidate_version="N/A"
+                printf "${CYAN}│ %-*.*s | %-*.*s | %-*.*s │${RESET}\n" "$apt_name_width" "$apt_name_width" "$package_name" "$apt_candidate_width" "$apt_candidate_width" "$candidate_version" "$apt_current_width" "$apt_current_width" "$current_version"
+            done
             if [ $NUM_UPGRADABLE -gt 10 ]; then
-                print_remaining_packages_line "$((NUM_UPGRADABLE-10))"
+                print_remaining_packages_line "$((NUM_UPGRADABLE-10))" "$APT_UPGRADE_TABLE_INNER_WIDTH"
             fi
             echo -e "${CYAN}└──────────────────────────────────────────────────────────────────────────────┘${RESET}"
             echo -e "${WHITE}Run: ${NEON_BLUE}${BOLD}sudo apt upgrade${RESET}"
@@ -367,14 +364,16 @@ elif command -v dnf &> /dev/null; then
     if [ -z "$UPGRADABLE_PACKAGES" ]; then
         echo -e "${GREEN}All installed packages are up to date.${RESET}"
     else
-        local dnf_name_width=30
-        local dnf_version_width=36
+        dnf_name_width=30
+        dnf_version_width=36
         NUM_UPGRADABLE=$(echo "$UPGRADABLE_PACKAGES" | wc -l)
         echo -e "${YELLOW}${BOLD}Upgrades available: ${NUM_UPGRADABLE} package(s)${RESET}"
         echo -e "${CYAN}┌─ Upgradable Packages (Name | Version) ─────────────────────────────────────┐${RESET}"
-        echo "$UPGRADABLE_PACKAGES" | head -10 | awk -v name_w="$dnf_name_width" -v version_w="$dnf_version_width" '{printf "│ %-*.*s | %-*.*s │\n", name_w, name_w, $1, version_w, version_w, $2}' | sed "s/^/\${CYAN}/" | sed "s/$/\${RESET}/"
+        echo "$UPGRADABLE_PACKAGES" | head -10 | awk -v name_w="$dnf_name_width" -v version_w="$dnf_version_width" '{printf "│ %-*.*s | %-*.*s │\n", name_w, name_w, $1, version_w, version_w, $2}' | while IFS= read -r line; do
+            echo -e "${CYAN}${line}${RESET}"
+        done
         if [ $NUM_UPGRADABLE -gt 10 ]; then
-            print_remaining_packages_line "$((NUM_UPGRADABLE-10))"
+            print_remaining_packages_line "$((NUM_UPGRADABLE-10))" "$DNF_UPGRADE_TABLE_INNER_WIDTH"
         fi
         echo -e "${CYAN}└──────────────────────────────────────────────────────────────────────────────┘${RESET}"
         echo -e "${WHITE}Run: ${NEON_BLUE}${BOLD}sudo dnf upgrade${RESET}"
