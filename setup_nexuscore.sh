@@ -59,7 +59,14 @@ sudo() {
                 log_error "Invalid sudo usage: '-u' requires a target user."
                 return 1
             fi
+            local target_user="$2"
             shift 2
+            if command -v runuser >/dev/null 2>&1; then
+                runuser -u "$target_user" -- "$@"
+            else
+                su -s /bin/bash "$target_user" -c "$(printf '%q ' "$@")"
+            fi
+            return $?
         fi
         "$@"
     else
@@ -699,7 +706,7 @@ install_nodejs() {
     fi
     if command -v npm &> /dev/null; then
         log_info "Installing global npm packages (system-wide)..."
-        sudo npm install -g yarn typescript ts-node nodemon pm2
+        sudo npm install -g --unsafe-perm yarn typescript ts-node nodemon pm2
         log_success "Installed global npm packages."
     else
         log_warning "npm not found. Skipping global npm packages."
