@@ -321,11 +321,11 @@ display_docker_runtime_ports() {
         return
     fi
 
-    printf "  %-18s %-30s %-28s %s\n" "CONTAINER" "IMAGE" "PORTS" "STATUS"
+    printf "  %-18s %-30s %-40s %s\n" "CONTAINER" "IMAGE" "PORTS" "STATUS"
     while IFS='|' read -r container_name container_image container_ports container_status; do
         [ -z "$container_name" ] && continue
         [ -z "$container_ports" ] && container_ports="(none exposed)"
-        printf "  %-18.18s %-30.30s %-28.28s %.40s\n" \
+        printf "  %-18.18s %-30.30s %-40s %.40s\n" \
             "$container_name" "$container_image" "$container_ports" "$container_status"
     done <<< "$containers"
 }
@@ -381,10 +381,10 @@ display_host_port_overview() {
         return
     fi
 
-    printf "  %-6s %-7s %-26s %s\n" "PROTO" "PORT" "LOCAL ADDRESS" "PROCESS"
+    printf "  %-6s %-7s %-40s %s\n" "PROTO" "PORT" "LOCAL ADDRESS" "PROCESS"
     while IFS='|' read -r proto port local_addr process_name; do
         [ -z "$proto" ] && continue
-        printf "  %-6.6s %-7.7s %-26.26s %.30s\n" "$proto" "$port" "$local_addr" "$process_name"
+        printf "  %-6.6s %-7.7s %-40s %.30s\n" "$proto" "$port" "$local_addr" "$process_name"
     done <<< "$listening_ports"
 }
 
