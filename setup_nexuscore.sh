@@ -877,11 +877,32 @@ install_caddy() {
     log_success "Caddy installed and running."
 }
 
+bring_up_tailscale() {
+    local tailscale_ip=""
+    tailscale_ip=$(tailscale ip -4 2>/dev/null | head -n 1 || true)
+    if [ -n "$tailscale_ip" ]; then
+        log_success "Tailscale is ready on IP $tailscale_ip."
+        return 0
+    fi
+
+    log_info "Starting Tailscale. Complete authentication if prompted."
+    if sudo tailscale up; then
+        tailscale_ip=$(tailscale ip -4 2>/dev/null | head -n 1 || true)
+        if [ -n "$tailscale_ip" ]; then
+            log_success "Tailscale connected with IP $tailscale_ip."
+        else
+            log_success "Tailscale started successfully."
+        fi
+    else
+        log_warning "Unable to complete 'tailscale up'. Run 'sudo tailscale up' manually."
+    fi
+}
+
 install_tailscale() {
     if command -v tailscale &> /dev/null; then
         log_info "Tailscale already installed: $(tailscale version | head -1). Ensuring service is running."
         sudo systemctl enable --now tailscaled
-        log_success "Tailscale is ready. Run 'sudo tailscale up' to authenticate."
+        bring_up_tailscale
         return 0
     fi
     if [[ "$DISTRO_FAMILY" == "debian" ]]; then
@@ -901,7 +922,7 @@ install_tailscale() {
             sudo ufw allow in on tailscale0
         fi
     fi
-    log_success "Tailscale installed. Run 'sudo tailscale up' to authenticate and connect to your tailnet."
+    bring_up_tailscale
 }
 
 install_cloudflared() {
