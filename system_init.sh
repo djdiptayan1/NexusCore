@@ -313,18 +313,15 @@ display_docker_runtime_ports() {
         return
     fi
 
-    local containers docker_ps_error
-    docker_ps_error=$(mktemp)
-    containers=$(docker ps --format '{{.Names}}|{{.Image}}|{{.Ports}}|{{.Status}}' 2>"$docker_ps_error")
+    local containers
+    containers=$(docker ps --format '{{.Names}}|{{.Image}}|{{.Ports}}|{{.Status}}' 2>&1)
     local docker_ps_exit=$?
 
     if [ $docker_ps_exit -ne 0 ]; then
         echo -e "  ${YELLOW}Unable to query Docker runtime state:${RESET}"
-        sed 's/^/    /' "$docker_ps_error"
-        rm -f "$docker_ps_error"
+        printf "%s\n" "$containers" | sed 's/^/    /'
         return
     fi
-    rm -f "$docker_ps_error"
 
     if [ -z "$containers" ]; then
         echo -e "  ${GRAY}No running Docker containers detected.${RESET}"
