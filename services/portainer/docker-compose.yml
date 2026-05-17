@@ -1,0 +1,25 @@
+# Portainer CE — Docker management UI
+# Access: https://<server-ip>:9443
+#
+# On first launch Portainer will ask you to create an admin account.
+# The data directory (./data) is mounted so your settings survive container
+# upgrades or restarts.
+services:
+  portainer:
+    image: portainer/portainer-ce:lts
+    container_name: portainer
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      # HTTPS web UI (self-signed cert by default)
+      - "9443:9443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data:/data
+    networks:
+      - portainer_network
+
+networks:
+  portainer_network:
+    driver: bridge
