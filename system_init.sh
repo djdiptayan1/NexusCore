@@ -332,7 +332,7 @@ display_docker_runtime_ports() {
         [ -z "$container_name" ] && continue
         [ -z "$container_ports" ] && container_ports="(none exposed)"
         echo -e "  ${WHITE}${BOLD}${container_name}${RESET} (${container_image})"
-        echo -e "    ports : ${container_ports}"
+        echo -e "    ports: ${container_ports}"
         echo -e "    status: ${container_status}"
     done <<< "$containers"
 }
@@ -391,7 +391,7 @@ display_host_port_overview() {
         return
     fi
 
-    printf "  %-6s %-7s %-45s %-30s\n" "PROTO" "PORT" "LOCAL ADDRESS" "PROCESS"
+    printf "  %-6.6s %-7.7s %-45.45s %-30.30s\n" "PROTO" "PORT" "LOCAL ADDRESS" "PROCESS"
     while IFS='|' read -r proto port local_addr process_name; do
         [ -z "$proto" ] && continue
         printf "  %-6.6s %-7.7s %-45.45s %-30.30s\n" "$proto" "$port" "$local_addr" "$process_name"
