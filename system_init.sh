@@ -394,10 +394,10 @@ display_host_port_overview() {
         return
     fi
 
-    printf "  %-6s %-7s %-45s %s\n" "PROTO" "PORT" "LOCAL ADDRESS" "PROCESS"
+    printf "  %-6s %-7s %-45s %-30s\n" "PROTO" "PORT" "LOCAL ADDRESS" "PROCESS"
     while IFS='|' read -r proto port local_addr process_name; do
         [ -z "$proto" ] && continue
-        printf "  %s %-7s %-45s %s\n" "$proto" "$port" "$local_addr" "$process_name"
+        printf "  %-6.6s %-7.7s %-45.45s %-30.30s\n" "$proto" "$port" "$local_addr" "$process_name"
     done <<< "$listening_ports"
 }
 
