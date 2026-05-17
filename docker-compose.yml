@@ -11,7 +11,7 @@ services:
       - "${TAILSCALE_IP:?TAILSCALE_IP must be set in .env}:53:53/udp"
       - "${TAILSCALE_IP:?TAILSCALE_IP must be set in .env}:8080:80/tcp"
     environment:
-      TZ: "Asia/Kolkata"
+      TZ: "${TZ:-UTC}"
       FTLCONF_webserver_api_password: "${PIHOLE_PASSWORD:?PIHOLE_PASSWORD must be set in .env}"
       FTLCONF_dns_listeningMode: "ALL"
     volumes:
