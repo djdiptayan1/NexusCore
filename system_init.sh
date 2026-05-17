@@ -339,6 +339,10 @@ display_docker_runtime_ports() {
 
 display_host_port_overview() {
     echo -e "${CYAN}► Host Listening Ports:${RESET}"
+    local proto_col_width=6
+    local port_col_width=7
+    local addr_col_width=45
+    local proc_col_width=30
 
     local listening_ports
     if command -v ss >/dev/null 2>&1; then
@@ -391,10 +395,18 @@ display_host_port_overview() {
         return
     fi
 
-    printf "  %-6.6s %-7.7s %-45.45s %-30.30s\n" "PROTO" "PORT" "LOCAL ADDRESS" "PROCESS"
+    printf "  %-*.*s %-*.*s %-*.*s %-*.*s\n" \
+        "$proto_col_width" "$proto_col_width" "PROTO" \
+        "$port_col_width" "$port_col_width" "PORT" \
+        "$addr_col_width" "$addr_col_width" "LOCAL ADDRESS" \
+        "$proc_col_width" "$proc_col_width" "PROCESS"
     while IFS='|' read -r proto port local_addr process_name; do
         [ -z "$proto" ] && continue
-        printf "  %-6.6s %-7.7s %-45.45s %-30.30s\n" "$proto" "$port" "$local_addr" "$process_name"
+        printf "  %-*.*s %-*.*s %-*.*s %-*.*s\n" \
+            "$proto_col_width" "$proto_col_width" "$proto" \
+            "$port_col_width" "$port_col_width" "$port" \
+            "$addr_col_width" "$addr_col_width" "$local_addr" \
+            "$proc_col_width" "$proc_col_width" "$process_name"
     done <<< "$listening_ports"
 }
 
