@@ -313,8 +313,18 @@ display_docker_runtime_ports() {
         return
     fi
 
-    local containers
-    containers=$(docker ps --format '{{.Names}}|{{.Image}}|{{.Ports}}|{{.Status}}' 2>/dev/null || true)
+    local containers docker_ps_error
+    docker_ps_error=$(mktemp)
+    containers=$(docker ps --format '{{.Names}}|{{.Image}}|{{.Ports}}|{{.Status}}' 2>"$docker_ps_error")
+    local docker_ps_exit=$?
+
+    if [ $docker_ps_exit -ne 0 ]; then
+        echo -e "  ${YELLOW}Unable to query Docker runtime state:${RESET}"
+        sed 's/^/    /' "$docker_ps_error"
+        rm -f "$docker_ps_error"
+        return
+    fi
+    rm -f "$docker_ps_error"
 
     if [ -z "$containers" ]; then
         echo -e "  ${GRAY}No running Docker containers detected.${RESET}"
@@ -339,7 +349,10 @@ display_host_port_overview() {
             {
                 proto=toupper($1)
                 local_addr=$5
-                proc=$NF
+                proc="-"
+                if (NF >= 7 && $7 ~ /^users:/) {
+                    proc=$7
+                }
                 port=local_addr
                 sub(/^.*:/, "", port)
                 gsub(/\[|\]/, "", local_addr)
@@ -381,6 +394,7 @@ display_host_port_overview() {
         return
     fi
 
+    printf "  %-6s %-7s %-45s %s\n" "PROTO" "PORT" "LOCAL ADDRESS" "PROCESS"
     while IFS='|' read -r proto port local_addr process_name; do
         [ -z "$proto" ] && continue
         printf "  %s %-7s %-45s %s\n" "$proto" "$port" "$local_addr" "$process_name"
