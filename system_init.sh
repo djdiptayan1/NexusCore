@@ -300,6 +300,116 @@ get_tailscale_ip_info() {
     fi
 }
 
+display_docker_runtime_ports() {
+    echo -e "${CYAN}► Docker Runtime Services:${RESET}"
+
+    if ! command -v docker >/dev/null 2>&1; then
+        echo -e "  ${YELLOW}Docker CLI not available.${RESET}"
+        return
+    fi
+
+    if ! docker info >/dev/null 2>&1; then
+        echo -e "  ${YELLOW}Docker daemon not accessible (service may be stopped).${RESET}"
+        return
+    fi
+
+    local containers
+    containers=$(docker ps --format '{{.Names}}|{{.Image}}|{{.Ports}}|{{.Status}}' 2>&1)
+    local docker_ps_exit=$?
+
+    if [ $docker_ps_exit -ne 0 ]; then
+        echo -e "  ${YELLOW}Unable to query Docker runtime state:${RESET}"
+        printf "%s\n" "$containers" | sed 's/^/    /'
+        return
+    fi
+
+    if [ -z "$containers" ]; then
+        echo -e "  ${GRAY}No running Docker containers detected.${RESET}"
+        return
+    fi
+
+    while IFS='|' read -r container_name container_image container_ports container_status; do
+        [ -z "$container_name" ] && continue
+        [ -z "$container_ports" ] && container_ports="(none exposed)"
+        echo -e "  ${WHITE}${BOLD}${container_name}${RESET} (${container_image})"
+        echo -e "    ports: ${container_ports}"
+        echo -e "    status: ${container_status}"
+    done <<< "$containers"
+}
+
+display_host_port_overview() {
+    echo -e "${CYAN}► Host Listening Ports:${RESET}"
+    local proto_col_width=6
+    local port_col_width=7
+    local addr_col_width=45
+    local proc_col_width=30
+
+    local listening_ports
+    if command -v ss >/dev/null 2>&1; then
+        listening_ports=$(ss -H -ltnup 2>/dev/null | awk '
+            {
+                proto=toupper($1)
+                local_addr=$5
+                proc="-"
+                if (NF >= 7 && $7 ~ /^users:/) {
+                    proc=$7
+                }
+                port=local_addr
+                sub(/^.*:/, "", port)
+                gsub(/\[|\]/, "", local_addr)
+                if (port == "*" || port == "") next
+                if (proc ~ /^users:\(\("/) {
+                    sub(/^users:\(\("/, "", proc)
+                    sub(/".*$/, "", proc)
+                } else if (proc == "") {
+                    proc="-"
+                }
+                printf "%s|%s|%s|%s\n", proto, port, local_addr, proc
+            }
+        ' | sort -u)
+    elif command -v netstat >/dev/null 2>&1; then
+        listening_ports=$(netstat -tulnp 2>/dev/null | awk '
+            NR > 2 {
+                proto=toupper($1)
+                local_addr=$4
+                proc=$7
+                port=local_addr
+                sub(/^.*:/, "", port)
+                gsub(/\[|\]/, "", local_addr)
+                if (port == "*" || port == "") next
+                if (proc == "-" || proc == "") {
+                    proc="-"
+                } else {
+                    sub(/\/.*/, "", proc)
+                }
+                printf "%s|%s|%s|%s\n", proto, port, local_addr, proc
+            }
+        ' | sort -u)
+    else
+        echo -e "  ${YELLOW}Neither ss nor netstat is available to inspect ports.${RESET}"
+        return
+    fi
+
+    if [ -z "$listening_ports" ]; then
+        echo -e "  ${GRAY}No listening ports detected.${RESET}"
+        return
+    fi
+
+    printf "  %-*.*s %-*.*s %-*.*s %-*.*s\n" \
+        "$proto_col_width" "$proto_col_width" "PROTO" \
+        "$port_col_width" "$port_col_width" "PORT" \
+        "$addr_col_width" "$addr_col_width" "LOCAL ADDRESS" \
+        "$proc_col_width" "$proc_col_width" "PROCESS"
+    while IFS='|' read -r proto port local_addr process_name; do
+        [ -z "$proto" ] && continue
+        printf "  %-*.*s %-*.*s %-*.*s %-*.*s\n" \
+            "$proto_col_width" "$proto_col_width" "$proto" \
+            "$port_col_width" "$port_col_width" "$port" \
+            "$addr_col_width" "$addr_col_width" "$local_addr" \
+            "$proc_col_width" "$proc_col_width" "$process_name"
+    done <<< "$listening_ports"
+}
+
 prompt_package_upgrade() {
     echo
     print_subheader "PACKAGE UPGRADE ACTION"
@@ -471,6 +581,12 @@ else
         done
     fi
 fi
+
+echo
+print_subheader "SERVICE PORT OVERVIEW"
+display_docker_runtime_ports
+echo
+display_host_port_overview
 
 # Enhanced Final Status Report
 print_subheader "FINAL SYSTEM STATUS"
