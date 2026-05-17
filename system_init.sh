@@ -300,6 +300,94 @@ get_tailscale_ip_info() {
     fi
 }
 
+display_docker_runtime_ports() {
+    echo -e "${CYAN}► Docker Runtime Services:${RESET}"
+
+    if ! command -v docker >/dev/null 2>&1; then
+        echo -e "  ${YELLOW}Docker CLI not available.${RESET}"
+        return
+    fi
+
+    if ! docker info >/dev/null 2>&1; then
+        echo -e "  ${YELLOW}Docker daemon not accessible (service may be stopped).${RESET}"
+        return
+    fi
+
+    local containers
+    containers=$(docker ps --format '{{.Names}}|{{.Image}}|{{.Ports}}|{{.Status}}' 2>/dev/null || true)
+
+    if [ -z "$containers" ]; then
+        echo -e "  ${GRAY}No running Docker containers detected.${RESET}"
+        return
+    fi
+
+    printf "  %-18s %-30s %-28s %s\n" "CONTAINER" "IMAGE" "PORTS" "STATUS"
+    while IFS='|' read -r container_name container_image container_ports container_status; do
+        [ -z "$container_name" ] && continue
+        [ -z "$container_ports" ] && container_ports="(none exposed)"
+        printf "  %-18.18s %-30.30s %-28.28s %.40s\n" \
+            "$container_name" "$container_image" "$container_ports" "$container_status"
+    done <<< "$containers"
+}
+
+display_host_port_overview() {
+    echo -e "${CYAN}► Host Listening Ports:${RESET}"
+
+    local listening_ports
+    if command -v ss >/dev/null 2>&1; then
+        listening_ports=$(ss -H -ltnup 2>/dev/null | awk '
+            {
+                proto=toupper($1)
+                local_addr=$5
+                proc=$NF
+                port=local_addr
+                sub(/^.*:/, "", port)
+                gsub(/\[|\]/, "", local_addr)
+                if (port == "*" || port == "") next
+                if (proc ~ /^users:\(\("/) {
+                    sub(/^users:\(\("/, "", proc)
+                    sub(/".*$/, "", proc)
+                } else if (proc == "") {
+                    proc="-"
+                }
+                printf "%s|%s|%s|%s\n", proto, port, local_addr, proc
+            }
+        ' | sort -u)
+    elif command -v netstat >/dev/null 2>&1; then
+        listening_ports=$(netstat -tulnp 2>/dev/null | awk '
+            NR > 2 {
+                proto=toupper($1)
+                local_addr=$4
+                proc=$7
+                port=local_addr
+                sub(/^.*:/, "", port)
+                gsub(/\[|\]/, "", local_addr)
+                if (port == "*" || port == "") next
+                if (proc == "-" || proc == "") {
+                    proc="-"
+                } else {
+                    sub(/\/.*/, "", proc)
+                }
+                printf "%s|%s|%s|%s\n", proto, port, local_addr, proc
+            }
+        ' | sort -u)
+    else
+        echo -e "  ${YELLOW}Neither ss nor netstat is available to inspect ports.${RESET}"
+        return
+    fi
+
+    if [ -z "$listening_ports" ]; then
+        echo -e "  ${GRAY}No listening ports detected.${RESET}"
+        return
+    fi
+
+    printf "  %-6s %-7s %-26s %s\n" "PROTO" "PORT" "LOCAL ADDRESS" "PROCESS"
+    while IFS='|' read -r proto port local_addr process_name; do
+        [ -z "$proto" ] && continue
+        printf "  %-6.6s %-7.7s %-26.26s %.30s\n" "$proto" "$port" "$local_addr" "$process_name"
+    done <<< "$listening_ports"
+}
+
 prompt_package_upgrade() {
     echo
     print_subheader "PACKAGE UPGRADE ACTION"
@@ -471,6 +559,12 @@ else
         done
     fi
 fi
+
+echo
+print_subheader "SERVICE PORT OVERVIEW"
+display_docker_runtime_ports
+echo
+display_host_port_overview
 
 # Enhanced Final Status Report
 print_subheader "FINAL SYSTEM STATUS"
