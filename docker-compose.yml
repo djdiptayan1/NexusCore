@@ -1,0 +1,64 @@
+# Core self-hosted services
+# Start with: docker compose up -d
+#
+# Copy .env.example to .env and set PIHOLE_PASSWORD and TAILSCALE_IP first.
+services:
+  pihole:
+    container_name: pihole
+    image: pihole/pihole:latest
+    ports:
+      - "${TAILSCALE_IP:?TAILSCALE_IP must be set in .env}:53:53/tcp"
+      - "${TAILSCALE_IP:?TAILSCALE_IP must be set in .env}:53:53/udp"
+      - "${TAILSCALE_IP:?TAILSCALE_IP must be set in .env}:8080:80/tcp"
+    environment:
+      TZ: "Asia/Kolkata"
+      FTLCONF_webserver_api_password: "${PIHOLE_PASSWORD:?PIHOLE_PASSWORD must be set in .env}"
+      FTLCONF_dns_listeningMode: "ALL"
+    volumes:
+      - pihole_data:/etc/pihole
+    cap_add:
+      - NET_ADMIN
+      - SYS_TIME
+      - SYS_NICE
+    restart: unless-stopped
+
+  portainer:
+    image: portainer/portainer-ce:lts
+    container_name: portainer
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "9443:9443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+
+  netdata:
+    image: netdata/netdata:stable
+    container_name: netdata
+    pid: host
+    network_mode: host
+    restart: unless-stopped
+    cap_add:
+      - SYS_PTRACE
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      - netdataconfig:/etc/netdata
+      - netdatalib:/var/lib/netdata
+      - netdatacache:/var/cache/netdata
+      - /:/host/root:ro,rslave
+      - /etc/passwd:/host/etc/passwd:ro
+      - /etc/group:/host/etc/group:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /etc/os-release:/host/etc/os-release:ro
+
+volumes:
+  pihole_data:
+  portainer_data:
+  netdataconfig:
+  netdatalib:
+  netdatacache:

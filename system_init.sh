@@ -285,6 +285,51 @@ print_remaining_packages_line() {
     printf "${CYAN}│ %-${inner_width}.${inner_width}s │${RESET}\n" "... and ${remaining} more packages"
 }
 
+get_tailscale_ip_info() {
+    if ! command -v tailscale >/dev/null 2>&1; then
+        echo "Not installed"
+        return 0
+    fi
+
+    local tailscale_ip
+    tailscale_ip=$(tailscale ip -4 2>/dev/null | head -n 1 || true)
+    if [ -n "$tailscale_ip" ]; then
+        echo "$tailscale_ip"
+    else
+        echo "Not connected"
+    fi
+}
+
+prompt_package_upgrade() {
+    echo
+    print_subheader "PACKAGE UPGRADE ACTION"
+    read -r -p "Do you want to update and upgrade packages now? (y/N): " run_upgrade
+    if [[ ! "$run_upgrade" =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}Skipped package upgrade.${RESET}"
+        return 0
+    fi
+
+    if command -v apt >/dev/null 2>&1; then
+        progress_bar 2 "Updating and upgrading apt packages"
+        if sudo apt update && sudo apt upgrade -y; then
+            echo -e "${GREEN}${BOLD}APT update and upgrade completed successfully.${RESET}"
+        else
+            echo -e "${RED}${BOLD}APT update/upgrade failed.${RESET}"
+            return 1
+        fi
+    elif command -v dnf >/dev/null 2>&1; then
+        progress_bar 2 "Refreshing DNF metadata"
+        if sudo dnf upgrade --refresh -y; then
+            echo -e "${GREEN}${BOLD}DNF upgrade completed successfully.${RESET}"
+        else
+            echo -e "${RED}${BOLD}DNF upgrade failed.${RESET}"
+            return 1
+        fi
+    else
+        echo -e "${YELLOW}⚠ No supported package manager detected (apt/dnf)${RESET}"
+    fi
+}
+
 # --- Main Script Enhancements ---
 
 clear
@@ -299,6 +344,7 @@ OS_INFO=$(lsb_release -ds 2>/dev/null || cat /etc/os-release 2>/dev/null | grep 
 KERNEL_INFO=$(uname -r)
 UPTIME_INFO=$(uptime -p)
 IP_ADDRESS_INFO=$(ip route get 1.1.1.1 | awk '{print $7; exit}' 2>/dev/null || echo "N/A")
+TAILSCALE_IP_INFO=$(get_tailscale_ip_info)
 ARCH_INFO=$(uname -m)
 CPU_MODEL=$(awk -F': ' '/model name/ {print $2; exit}' /proc/cpuinfo 2>/dev/null || echo "N/A")
 CPU_CORES=$(nproc 2>/dev/null || echo "N/A")
@@ -312,6 +358,7 @@ echo -e "${CYAN}│${RESET} CPU Model       : ${WHITE}$CPU_MODEL${RESET}$(printf
 echo -e "${CYAN}│${RESET} CPU Cores       : ${WHITE}$CPU_CORES${RESET}$(printf "%*s" $((40-${#CPU_CORES})) "")${CYAN}│${RESET}"
 echo -e "${CYAN}│${RESET} Uptime          : ${GREEN}$UPTIME_INFO${RESET}$(printf "%*s" $((40-${#UPTIME_INFO})) "")${CYAN}│${RESET}"
 echo -e "${CYAN}│${RESET} Primary IP      : ${GREEN}$IP_ADDRESS_INFO${RESET}$(printf "%*s" $((40-${#IP_ADDRESS_INFO})) "")${CYAN}│${RESET}"
+echo -e "${CYAN}│${RESET} Tailscale IP    : ${GREEN}$TAILSCALE_IP_INFO${RESET}$(printf "%*s" $((40-${#TAILSCALE_IP_INFO})) "")${CYAN}│${RESET}"
 echo -e "${CYAN}└───────────────────────────────────────────────────────────┘${RESET}"
 
 echo
@@ -470,3 +517,4 @@ print_header "NEXUS CORE v2.0: INITIALIZATION COMPLETE"
 echo -e "${NEON_GREEN}${BOLD}System initialization completed.${RESET}"
 echo -e "${CYAN}${BOLD}Review the package and status sections above for details.${RESET}"
 echo
+prompt_package_upgrade

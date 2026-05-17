@@ -23,7 +23,8 @@ INSTALL_CPP=false
 INSTALL_NODEJS=false
 INSTALL_CLOUDFLARED=false
 INSTALL_MONITORING_TOOLS=false
-INSTALL_NGINX=false
+INSTALL_CADDY=false
+INSTALL_TAILSCALE=false
 SETUP_UFW=false
 SETUP_SWAP=false
 SWAP_SIZE="2G"
@@ -443,8 +444,12 @@ interactive_setup() {
     echo -e "\033[1;33m--- Server Software ---\033[0m"
     echo
 
-    if ask_yes_no "  Install Nginx web server?"; then
-        INSTALL_NGINX=true
+    if ask_yes_no "  Install Caddy web server?"; then
+        INSTALL_CADDY=true
+    fi
+
+    if ask_yes_no "  Install Tailscale VPN?"; then
+        INSTALL_TAILSCALE=true
     fi
 
     if ask_yes_no "  Install Cloudflared (Cloudflare Tunnel)?"; then
@@ -474,7 +479,8 @@ interactive_setup() {
     echo -e "  Docker:            $INSTALL_DOCKER"
     echo -e "  Miniconda:         $INSTALL_MINICONDA"
     echo -e "  \033[1;36m[Software]\033[0m"
-    echo -e "  Nginx:             $INSTALL_NGINX"
+    echo -e "  Caddy:             $INSTALL_CADDY"
+    echo -e "  Tailscale:         $INSTALL_TAILSCALE"
     echo -e "  Cloudflared:       $INSTALL_CLOUDFLARED"
     echo -e "  Monitoring tools:  $INSTALL_MONITORING_TOOLS"
     echo
@@ -834,29 +840,89 @@ install_monitoring_tools() {
     log_success "Monitoring tools installed."
 }
 
-install_nginx() {
-    if command -v nginx &> /dev/null; then
-        log_info "Nginx already installed. Ensuring service is running."
-        sudo systemctl enable --now nginx
-        log_success "Nginx is ready."
+install_caddy() {
+    if command -v caddy &> /dev/null; then
+        log_info "Caddy already installed: $(caddy version). Ensuring service is running."
+        sudo systemctl enable --now caddy
+        log_success "Caddy is ready."
         return 0
     fi
     if [[ "$DISTRO_FAMILY" == "debian" ]]; then
-        sudo apt install -y nginx
+        sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
+        curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
+            | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+        curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
+            | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+        sudo chmod o+r /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+        sudo chmod o+r /etc/apt/sources.list.d/caddy-stable.list
+        sudo apt update
+        sudo apt install -y caddy
     elif [[ "$DISTRO_FAMILY" == "fedora" ]]; then
-        sudo dnf install -y nginx
+        sudo dnf install -y 'dnf-command(copr)'
+        sudo dnf copr enable -y @caddy/caddy
+        sudo dnf install -y caddy
     fi
-    sudo systemctl enable --now nginx
+    sudo systemctl enable --now caddy
     if [ "$SETUP_UFW" = true ]; then
         if [[ "$DISTRO_FAMILY" == "debian" ]] && sudo ufw status | grep -qw active; then
-            sudo ufw allow 'Nginx Full'
+            sudo ufw allow 80/tcp
+            sudo ufw allow 443/tcp
+            sudo ufw allow 443/udp
         elif [[ "$DISTRO_FAMILY" == "fedora" ]] && systemctl is-active --quiet firewalld; then
             sudo firewall-cmd --permanent --add-service=http
             sudo firewall-cmd --permanent --add-service=https
             sudo firewall-cmd --reload
         fi
     fi
-    log_success "Nginx installed and running."
+    log_success "Caddy installed and running."
+}
+
+bring_up_tailscale() {
+    local tailscale_ip=""
+    tailscale_ip=$(tailscale ip -4 2>/dev/null | head -n 1 || true)
+    if [ -n "$tailscale_ip" ]; then
+        log_success "Tailscale is ready on IP $tailscale_ip."
+        return 0
+    fi
+
+    log_info "Starting Tailscale. Complete authentication if prompted."
+    if sudo tailscale up; then
+        tailscale_ip=$(tailscale ip -4 2>/dev/null | head -n 1 || true)
+        if [ -n "$tailscale_ip" ]; then
+            log_success "Tailscale connected with IP $tailscale_ip."
+        else
+            log_success "Tailscale started successfully."
+        fi
+    else
+        log_warning "Unable to complete 'tailscale up'. Run 'sudo tailscale up' manually."
+    fi
+}
+
+install_tailscale() {
+    if command -v tailscale &> /dev/null; then
+        log_info "Tailscale already installed: $(tailscale version | head -1). Ensuring service is running."
+        sudo systemctl enable --now tailscaled
+        bring_up_tailscale
+        return 0
+    fi
+    if [[ "$DISTRO_FAMILY" == "debian" ]]; then
+        curl -fsSL "https://pkgs.tailscale.com/stable/${DISTRO_ID}/$(lsb_release -cs).noarmor.gpg" \
+            | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg > /dev/null
+        curl -fsSL "https://pkgs.tailscale.com/stable/${DISTRO_ID}/$(lsb_release -cs).tailscale-keyring.list" \
+            | sudo tee /etc/apt/sources.list.d/tailscale.list
+        sudo apt update
+        sudo apt install -y tailscale
+    elif [[ "$DISTRO_FAMILY" == "fedora" ]]; then
+        sudo dnf config-manager --add-repo https://pkgs.tailscale.com/stable/fedora/tailscale.repo
+        sudo dnf install -y tailscale
+    fi
+    sudo systemctl enable --now tailscaled
+    if [ "$SETUP_UFW" = true ]; then
+        if [[ "$DISTRO_FAMILY" == "debian" ]] && sudo ufw status | grep -qw active; then
+            sudo ufw allow in on tailscale0
+        fi
+    fi
+    bring_up_tailscale
 }
 
 install_cloudflared() {
@@ -954,7 +1020,8 @@ collect_system_logs() {
         echo "C/C++: $INSTALL_CPP"
         echo "Docker: $INSTALL_DOCKER"
         echo "Miniconda: $INSTALL_MINICONDA"
-        echo "Nginx: $INSTALL_NGINX"
+        echo "Caddy: $INSTALL_CADDY"
+        echo "Tailscale: $INSTALL_TAILSCALE"
         echo "Cloudflared: $INSTALL_CLOUDFLARED"
         echo "Monitoring: $INSTALL_MONITORING_TOOLS"
         echo "UFW: $SETUP_UFW"
@@ -1080,8 +1147,12 @@ run_main_operations() {
     fi
 
     # Server software
-    if [ "$INSTALL_NGINX" = true ]; then
-        run_component "Nginx" install_nginx
+    if [ "$INSTALL_CADDY" = true ]; then
+        run_component "Caddy" install_caddy
+    fi
+
+    if [ "$INSTALL_TAILSCALE" = true ]; then
+        run_component "Tailscale" install_tailscale
     fi
 
     if [ "$INSTALL_CLOUDFLARED" = true ]; then
@@ -1161,8 +1232,11 @@ main_entry_point() {
             echo -e "   \033[1;31m⚠ Password auth is DISABLED. Ensure you have SSH key access before disconnecting!\033[0m"
             echo -e "\033[1;33m${step}. Setup SSH keys (from your local machine):\033[0m ssh-copy-id ${ADMIN_USER}@$(hostname -I | awk '{print $1}')"; ((step++))
         fi
-        if [ "$INSTALL_NGINX" = true ]; then
-            echo -e "\033[1;33m${step}. Nginx is running:\033[0m http://$(hostname -I | awk '{print $1}')"; ((step++))
+        if [ "$INSTALL_CADDY" = true ]; then
+            echo -e "\033[1;33m${step}. Caddy is running:\033[0m http://$(hostname -I | awk '{print $1}') — edit /etc/caddy/Caddyfile to configure sites"; ((step++))
+        fi
+        if [ "$INSTALL_TAILSCALE" = true ]; then
+            echo -e "\033[1;33m${step}. Verify Tailscale connection:\033[0m tailscale ip -4 (run sudo tailscale up only if setup did not finish during install)"; ((step++))
         fi
         echo -e "\033[1;33m${step}. View system logs:\033[0m ls /var/log/nexuscore/"; ((step++))
 
