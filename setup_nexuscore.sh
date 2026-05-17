@@ -1236,7 +1236,7 @@ main_entry_point() {
             echo -e "\033[1;33m${step}. Caddy is running:\033[0m http://$(hostname -I | awk '{print $1}') — edit /etc/caddy/Caddyfile to configure sites"; ((step++))
         fi
         if [ "$INSTALL_TAILSCALE" = true ]; then
-            echo -e "\033[1;33m${step}. Verify Tailscale connection:\033[0m tailscale ip -4  (run sudo tailscale up only if setup did not finish during install)"; ((step++))
+            echo -e "\033[1;33m${step}. Verify Tailscale connection:\033[0m tailscale ip -4 (run sudo tailscale up only if setup did not finish during install)"; ((step++))
         fi
         echo -e "\033[1;33m${step}. View system logs:\033[0m ls /var/log/nexuscore/"; ((step++))
 

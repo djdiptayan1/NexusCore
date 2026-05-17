@@ -310,7 +310,7 @@ prompt_package_upgrade() {
     fi
 
     if command -v apt >/dev/null 2>&1; then
-        progress_bar 2 "Updating apt package lists"
+        progress_bar 2 "Updating and upgrading apt packages"
         if sudo apt update && sudo apt upgrade -y; then
             echo -e "${GREEN}${BOLD}APT update and upgrade completed successfully.${RESET}"
         else
